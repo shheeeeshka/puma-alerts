@@ -1,6 +1,7 @@
-import { fileURLToPath } from "url";
-import path from "path";
 import nodemailer from "nodemailer";
+import path from "path";
+
+import { fileURLToPath } from "url";
 import { config } from "dotenv";
 
 config();
@@ -40,7 +41,6 @@ class MailService {
                 {
                     filename: imageName,
                     path: imagePath,
-                    // cid: "image001",
                 }
             ],
         });
