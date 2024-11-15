@@ -6,18 +6,19 @@ import mailService from "./mailService.js";
 config();
 
 async function main() {
-    // const executablePath = process.env.OS === "macos" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "";
+    const executablePath = process.env.OS === "macos" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "";
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: false,
         timeout: 0,
         protocolTimeout: 0,
         userDataDir: "./tmp",
+        executablePath,
         // executablePath: `C:\\Users\\elena\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe`,
     });
     const page = await browser.newPage();
 
-    await page.goto(process.env.TARGET_URL, { waitUntil: "networkidle0" });
+    await page.goto(process.env.TARGET_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.setViewport({ width: 1780, height: 1080 });
 
     if (process.env.AUTH === "1") {
@@ -39,8 +40,8 @@ async function main() {
     let prevTaskCount = "";
 
     while (true) {
-        await page.reload({ waitUntil: "networkidle0" });
-        await sleep(10);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await sleep(1.2);
 
         const isTaskCountUpdated = await page.evaluate((prevCount) => {
             // const dashBoardTBody = document.querySelectorAll("#root>div>div:nth-child(3)>div.dashboard>div>div>div:nth-child(1)>div>div>div.widget>div>div:last-child>div>table>tbody>tr")
@@ -59,7 +60,7 @@ async function main() {
             const formattedDate = getFormattedDate();
             const screenshotName = `screenshot${formattedDate}.png`;
             await page.screenshot({ ...screenshotOptions, path: `./screenshots/${screenshotName}` });
-            await sleep(2);
+            await sleep(1.2);
             try {
                 await mailService.sendAlertMail(screenshotName, process.env.TARGET_URL);
                 console.log("Письмо успешно отправлено");
