@@ -31,8 +31,8 @@ async function main() {
         clip: {
             x: 250,
             y: 40,
-            width: 1100,
-            height: 620,
+            width: 1100, // must depend on task list width
+            height: 620, // must depend on task list height
         },
         fullPage: false,
     };
@@ -44,11 +44,6 @@ async function main() {
         await sleep(.6);
 
         const isTaskCountUpdated = await page.evaluate((prevCount) => {
-            // const dashBoardTBody = document.querySelectorAll("#root>div>div:nth-child(3)>div.dashboard>div>div>div:nth-child(1)>div>div>div.widget>div>div:last-child>div>table>tbody>tr")
-            // if (dashBoardTBody) {
-            //     // dashBoardBtn.click();
-            //     console.log({ dashBoardTBody });
-            // }
             const taskCountElement = document.querySelector("#root>div>div:nth-child(3)>div.dashboard>div>div>div:nth-child(1)>div>div>div.widget>div>div:nth-child(1)>button>div>span:nth-child(2)");
             const taskCount = taskCountElement ? taskCountElement.textContent : "";
             const updated = taskCount && taskCount !== prevCount;
