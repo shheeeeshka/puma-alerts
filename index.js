@@ -6,14 +6,14 @@ import mailService from "./mailService.js";
 config();
 
 async function main() {
-    const executablePath = process.env.OS === "macos" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "";
+    // const executablePath = process.env.OS === "macos" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "";
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: false,
         timeout: 0,
         protocolTimeout: 0,
         userDataDir: "./tmp",
-        executablePath,
+        // executablePath,
         // executablePath: `C:\\Users\\elena\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe`,
     });
     const page = await browser.newPage();
