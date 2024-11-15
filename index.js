@@ -6,6 +6,7 @@ import mailService from "./mailService.js";
 config();
 
 async function main() {
+    // const executablePath = process.env.OS === "macos" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "";
     const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: false,
