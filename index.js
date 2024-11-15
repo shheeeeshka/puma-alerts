@@ -12,7 +12,7 @@ async function main() {
         timeout: 0,
         protocolTimeout: 0,
         userDataDir: "./tmp",
-        executablePath: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+        executablePath: `C:\Users\elena\AppData\Local\Yandex\YandexBrowser\Application\browser.exe`,
     });
     const page = await browser.newPage();
 
@@ -20,8 +20,8 @@ async function main() {
     await page.setViewport({ width: 1780, height: 1080 });
 
     if (process.env.AUTH === "1") {
-        console.log("Самое время войти в аккаунт, у Вас ровно 3 минуты!!");
-        await sleep(180);
+        console.log("Самое время войти в аккаунт, у Вас ровно 4 минуты!!");
+        await sleep(240);
     }
 
     const screenshotOptions = {
@@ -53,7 +53,7 @@ async function main() {
             return { updated, taskCount };
         }, prevTaskCount);
 
-        if (isTaskCountUpdated.updated) {
+        if (isTaskCountUpdated.updated && isTaskCountUpdated.taskCount !== "0") {
             prevTaskCount = isTaskCountUpdated.taskCount;
             const formattedDate = getFormattedDate();
             const screenshotName = `screenshot${formattedDate}.png`;
