@@ -13,7 +13,7 @@ async function main() {
         timeout: 0,
         protocolTimeout: 0,
         userDataDir: "./tmp",
-        executablePath: `C:\\Users\\elena\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe`,
+        // executablePath: `C:\\Users\\elena\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe`,
     });
     const page = await browser.newPage();
 
