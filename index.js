@@ -1,27 +1,33 @@
-import puppeteer from 'puppeteer';
+import puppeteer, { executablePath } from 'puppeteer';
 import { config } from 'dotenv';
 import { getFormattedDate, sleep, getChromePath, isRunningOnHosting } from './utils.js';
 import TelegramNotifier from './telegramNotifier.js';
 
 config();
 
-// Инициализация уведомителя
 const notifier = new TelegramNotifier({
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID
 });
 
-// Конфигурация браузера
+if (!process.env.TELEGRAM_CHAT_ID) {
+    console.log('ChatId не задан. Для получения отправьте сообщение боту, и скрипт его выведет.');
+    const chatId = await notifier.listenForChatId();
+    console.log(`Запишите полученный chatId в .env: TELEGRAM_CHAT_ID=${chatId}`);
+    process.exit(0);
+}
+
 const browserConfig = {
-    headless: isRunningOnHosting() ? 'new' : false,
+    headless: false,
+    // headless: isRunningOnHosting() ? 'new' : false,
     defaultViewport: null,
     timeout: 0,
     protocolTimeout: 0,
     userDataDir: './tmp',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 };
 
-// Добавляем путь к Chrome, если не на хостинге
 if (!isRunningOnHosting()) {
     browserConfig.executablePath = await getChromePath();
 }
