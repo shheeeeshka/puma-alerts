@@ -20,22 +20,34 @@ export const isRunningOnHosting = () => {
   );
 };
 
-export const getChromePath = async () => {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
+export async function getChromePath() {
+  // Стандартные пути, где может находиться Chrome
+  const possiblePaths = [
+    process.env.PUPPETEER_EXECUTABLE_PATH, // Если путь задан вручную
+    '/usr/bin/google-chrome',              // Путь на Render
+    '/usr/bin/chromium-browser',           // Альтернативный путь
+    '/opt/google/chrome/chrome',           // Другой возможный путь
+    '/usr/bin/chrome',                     // Ещё один вариант
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // Для Mac
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'    // Для Windows
+  ].filter(Boolean);
+
+  for (const path of possiblePaths) {
+    if (fs.existsSync(path)) {
+      console.log(`Chrome найден по пути: ${path}`);
+      return path;
+    }
   }
 
-  // Пути для Render.com
-  const renderPaths = [
-    '/usr/bin/google-chrome',
-    '/opt/google/chrome/chrome'
-  ];
-
-  for (const path of renderPaths) {
-    if (fs.existsSync(path)) return path;
-  }
-
-  throw new Error('Chrome не найден');
+  throw new Error(`
+    Chrome не найден. Проверенные пути:
+    ${possiblePaths.join('\n')}
+    
+    Попробуйте одно из следующих решений:
+    1. Установите пакет puppeteer вместо puppeteer-core
+    2. Добавьте сборку Chrome в build.sh
+    3. Используйте @sparticuz/chromium
+  `);
 }
 
 // export const getChromePath = async () => {
