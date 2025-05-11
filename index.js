@@ -1,3 +1,4 @@
+import chromium from '@sparticuz/chromium';
 import puppeteer, { executablePath } from "puppeteer";
 import { config } from "dotenv";
 import {
@@ -25,14 +26,18 @@ if (!process.env.TELEGRAM_CHAT_ID) {
 }
 
 const browserConfig = {
-    headless: true,
-    defaultViewport: null,
-    timeout: 0,
-    protocolTimeout: 0,
-    userDataDir: "./tmp",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    executablePath: await getChromePath(),
-};
+    args: [
+      ...chromium.args,
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--single-process'
+    ],
+    executablePath: process.env.CHROMIUM_PATH || await chromium.executablePath(),
+    headless: chromium.headless,
+    defaultViewport: chromium.defaultViewport,
+    ignoreHTTPSErrors: true,
+  };
 
 if (!isRunningOnHosting()) {
     console.log(".(-=0)");
