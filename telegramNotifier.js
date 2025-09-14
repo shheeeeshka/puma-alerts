@@ -161,7 +161,6 @@ class TelegramNotifier {
         ],
         [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
         [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
-        [{ text: "🔄 Обновить конфиг", callback_data: "refresh_config" }],
       ],
     };
 
@@ -186,7 +185,7 @@ class TelegramNotifier {
             `📋 Вайтлист спринтов: ${
               CONFIG.sprintWhitelist.join(", ") || "не задан"
             }\n` +
-            `🌐 URL доски: ${CONFIG.targetUrl}\n` +
+            `🌐 URL доски: ${CONFIG.targetBoardUrl}\n` +
             `🔐 Аутентификация: ${
               CONFIG.authRequired ? "✅ Требуется" : "❌ Не требуется"
             }`;
@@ -206,14 +205,8 @@ class TelegramNotifier {
           await this.sendConfigMenu();
           break;
 
-        case "refresh_config":
-          await this.sendText("🔄 Конфигурация обновлена");
-          await this.sendConfigMenu();
-          break;
-
         default:
           await this.sendText("❌ Неизвестная команда");
-          await this.sendConfigMenu();
       }
 
       await axios.post(`${this.apiUrl}/answerCallbackQuery`, {
@@ -222,10 +215,6 @@ class TelegramNotifier {
       });
     } catch (error) {
       console.error("Ошибка обработки callback:", error);
-      await axios.post(`${this.apiUrl}/answerCallbackQuery`, {
-        callback_query_id: query.id,
-        text: "Ошибка выполнения команды",
-      });
     }
   }
 
