@@ -12,14 +12,91 @@ class TelegramNotifier {
     this.botToken = botToken;
     this.chatId = chatId;
     this.apiUrl = `https://api.telegram.org/bot${this.botToken}`;
+    this.pollingInterval = null;
+    this.lastMessageId = null;
+    this.waitingForInput = null;
+    this.configMenuMessageId = null;
   }
 
-  async sendText(message, keyboard = null) {
+  async startPolling() {
+    console.log("Запуск long polling для обработки callback-ов...");
+    let offset = 0;
+
+    this.pollingInterval = setInterval(async () => {
+      try {
+        const response = await axios.get(`${this.apiUrl}/getUpdates`, {
+          params: {
+            offset,
+            timeout: 10,
+            allowed_updates: ["message", "callback_query"],
+          },
+        });
+
+        const updates = response.data.result;
+
+        for (const update of updates) {
+          if (update.message) {
+            await this.handleMessage(update.message);
+          }
+
+          if (update.callback_query) {
+            await this.handleCallback(update.callback_query);
+          }
+
+          offset = update.update_id + 1;
+        }
+      } catch (error) {
+        if (error.response?.status !== 409) {
+          console.error("Ошибка long polling:", error.message);
+        }
+      }
+    }, 1000);
+  }
+
+  stopPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  async deleteMessage(messageId) {
+    try {
+      await axios.post(`${this.apiUrl}/deleteMessage`, {
+        chat_id: this.chatId,
+        message_id: messageId,
+      });
+    } catch (error) {}
+  }
+
+  async editMessage(messageId, text, keyboard = null) {
+    try {
+      const data = {
+        chat_id: this.chatId,
+        message_id: messageId,
+        text: text,
+        parse_mode: "HTML",
+      };
+
+      if (keyboard) {
+        data.reply_markup = keyboard;
+      }
+
+      await axios.post(`${this.apiUrl}/editMessageText`, data);
+    } catch (error) {}
+  }
+
+  async sendText(message, keyboard = null, isConfigMenu = false) {
     if (!this.chatId) {
       console.warn("chatId не задан");
       return;
     }
     try {
+      if (this.lastMessageId && this.waitingForInput) {
+        await this.deleteMessage(this.lastMessageId);
+        this.waitingForInput = null;
+      }
+
       const data = {
         chat_id: this.chatId,
         text: message,
@@ -31,12 +108,14 @@ class TelegramNotifier {
       }
 
       const response = await axios.post(`${this.apiUrl}/sendMessage`, data);
+      this.lastMessageId = response.data.result.message_id;
+
+      if (isConfigMenu) {
+        this.configMenuMessageId = this.lastMessageId;
+      }
+
       return response.data;
     } catch (error) {
-      console.error(
-        "Ошибка отправки текста:",
-        error.response?.data || error.message
-      );
       throw error;
     }
   }
@@ -73,10 +152,6 @@ class TelegramNotifier {
         headers: formData.getHeaders(),
       });
     } catch (error) {
-      console.error(
-        "Ошибка отправки уведомления:",
-        error.response?.data || error.message
-      );
       throw error;
     }
   }
@@ -133,10 +208,6 @@ class TelegramNotifier {
         headers: formData.getHeaders(),
       });
     } catch (error) {
-      console.error(
-        "Ошибка отправки двойного уведомления:",
-        error.response?.data || error.message
-      );
       throw error;
     }
   }
@@ -145,34 +216,43 @@ class TelegramNotifier {
     const keyboard = {
       inline_keyboard: [
         [{ text: "📊 Текущая конфигурация", callback_data: "show_config" }],
-        [
-          {
-            text: CONFIG.autoAssign
-              ? "🔴 Выключить автозабор"
-              : "🟢 Включить автозабор",
-            callback_data: "toggle_autoassign",
-          },
-        ],
-        [
-          {
-            text: "🎯 Лимит задач: " + CONFIG.maxTasks,
-            callback_data: "change_max_tasks",
-          },
-        ],
-        [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
-        [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
+        // [
+        //   {
+        //     text: CONFIG.autoAssign
+        //       ? "🔴 Выключить автозабор"
+        //       : "🟢 Включить автозабор",
+        //     callback_data: "toggle_autoassign",
+        //   },
+        // ],
+        // [
+        //   {
+        //     text: CONFIG.authRequired
+        //       ? "🔴 Выключить авторизацию"
+        //       : "🟢 Включить авторизацию",
+        //     callback_data: "toggle_auth",
+        //   },
+        // ],
+        // [
+        //   {
+        //     text: "🎯 Лимит задач: " + CONFIG.maxTasks,
+        //     callback_data: "change_max_tasks",
+        //   },
+        // ],
+        // [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
+        // [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
       ],
     };
 
     await this.sendText(
       "⚙️ <b>Панель управления мониторингом</b>\n\nВыберите действие:",
-      keyboard
+      keyboard,
+      true
     );
   }
 
   async handleCallback(query) {
     try {
-      const { data, message } = query;
+      const { data, id, message } = query;
 
       switch (data) {
         case "show_config":
@@ -181,23 +261,23 @@ class TelegramNotifier {
             `🔄 Автозабор задач: ${
               CONFIG.autoAssign ? "✅ Включен" : "❌ Выключен"
             }\n` +
+            `🔐 Авторизация: ${
+              CONFIG.authRequired ? "✅ Включена" : "❌ Выключена"
+            }\n` +
             `🎯 Лимит задач: ${CONFIG.maxTasks}\n` +
             `📋 Вайтлист спринтов: ${
               CONFIG.sprintWhitelist.join(", ") || "не задан"
             }\n` +
-            `🌐 URL доски: ${CONFIG.targetBoardUrl}\n` +
-            `🔐 Аутентификация: ${
-              CONFIG.authRequired ? "✅ Требуется" : "❌ Не требуется"
-            }`;
+            `🌐 URL доски: ${CONFIG.targetBoardUrl}`;
 
-          await this.sendText(configText);
-          await this.sendConfigMenu();
+          await this.editMessage(message.message_id, configText);
           break;
 
         case "toggle_autoassign":
           CONFIG.autoAssign = !CONFIG.autoAssign;
           process.env.AUTO_ASSIGN = CONFIG.autoAssign ? "1" : "0";
-          await this.sendText(
+          await this.editMessage(
+            message.message_id,
             `Автозабор задач ${
               CONFIG.autoAssign ? "✅ включен" : "❌ выключен"
             }`
@@ -205,16 +285,115 @@ class TelegramNotifier {
           await this.sendConfigMenu();
           break;
 
+        case "toggle_auth":
+          CONFIG.authRequired = !CONFIG.authRequired;
+          process.env.AUTH = CONFIG.authRequired ? "1" : "0";
+          await this.editMessage(
+            message.message_id,
+            `Авторизация ${
+              CONFIG.authRequired ? "✅ включена" : "❌ выключена"
+            }`
+          );
+          await this.sendConfigMenu();
+          break;
+
+        case "change_max_tasks":
+          this.waitingForInput = "max_tasks";
+          await this.sendText("Введите новое значение лимита задач (число):");
+          break;
+
+        case "change_whitelist":
+          this.waitingForInput = "whitelist";
+          await this.sendText(
+            "Введите номера спринтов через запятую (например: 19,10):"
+          );
+          break;
+
+        case "change_target_url":
+          this.waitingForInput = "target_url";
+          await this.sendText("Введите новый URL доски:");
+          break;
+
         default:
           await this.sendText("❌ Неизвестная команда");
       }
 
       await axios.post(`${this.apiUrl}/answerCallbackQuery`, {
-        callback_query_id: query.id,
+        callback_query_id: id,
         text: "Команда выполнена",
       });
-    } catch (error) {
-      console.error("Ошибка обработки callback:", error);
+    } catch (error) {}
+  }
+
+  async handleMessage(message) {
+    if (!message.text) return;
+
+    const text = message.text.trim();
+
+    if (this.waitingForInput) {
+      switch (this.waitingForInput) {
+        case "max_tasks":
+          if (text.match(/^\d+$/)) {
+            CONFIG.maxTasks = parseInt(text);
+            process.env.MAX_TASKS = text;
+            await this.sendText(`✅ Лимит задач изменен на: ${text}`);
+            await this.sendConfigMenu();
+          } else {
+            await this.sendText("❌ Введите корректное число");
+          }
+          this.waitingForInput = null;
+          return;
+
+        case "whitelist":
+          CONFIG.sprintWhitelist = text
+            ? text.split(",").map((s) => s.trim())
+            : [];
+          process.env.SPRINT_WHITELIST = CONFIG.sprintWhitelist.join(",");
+          await this.sendText(
+            `✅ Вайтлист спринтов изменен: ${
+              CONFIG.sprintWhitelist.join(", ") || "очищен"
+            }`
+          );
+          await this.sendConfigMenu();
+          this.waitingForInput = null;
+          return;
+
+        case "target_url":
+          if (text.startsWith("http")) {
+            CONFIG.targetBoardUrl = text;
+            process.env.TARGET_BOARD_URL = text;
+            await this.sendText(`✅ URL доски изменен на: ${text}`);
+            await this.sendConfigMenu();
+          } else {
+            await this.sendText("❌ Введите корректный URL");
+          }
+          this.waitingForInput = null;
+          return;
+      }
+    }
+
+    if (text === "/config") {
+      await this.sendConfigMenu();
+      return;
+    }
+
+    if (text === "/start") {
+      const keyboard = {
+        keyboard: [[{ text: "⚙️ Панель управления" }]],
+        resize_keyboard: true,
+        one_time_keyboard: false,
+      };
+
+      await this.sendText(
+        "👋 <b>Добро пожаловать!</b>\n\nНажмите кнопку ниже для управления настройками мониторинга.",
+        keyboard
+      );
+      return;
+    }
+
+    if (text === "⚙️ Панель управления") {
+      await this.sendConfigMenu();
+      return;
     }
   }
 
@@ -231,18 +410,17 @@ class TelegramNotifier {
         for (const update of updates) {
           if (update.message && update.message.chat && update.message.chat.id) {
             const chatId = update.message.chat.id;
+            this.chatId = chatId;
+
+            const keyboard = {
+              keyboard: [[{ text: "⚙️ Панель управления" }]],
+              resize_keyboard: true,
+              one_time_keyboard: false,
+            };
+
             await this.sendText(
               `👋 <b>Добро пожаловать!</b>\n\nВаш chatId: <code>${chatId}</code>\n\nЗапишите его в переменную окружения TELEGRAM_CHAT_ID`,
-              {
-                inline_keyboard: [
-                  [
-                    {
-                      text: "⚙️ Панель управления",
-                      callback_data: "show_config",
-                    },
-                  ],
-                ],
-              }
+              keyboard
             );
             return chatId;
           }
@@ -255,9 +433,7 @@ class TelegramNotifier {
         if (updates.length > 0) {
           offset = updates[updates.length - 1].update_id + 1;
         }
-      } catch (err) {
-        console.error("Ошибка при получении обновлений:", err.message);
-      }
+      } catch (err) {}
       await new Promise((res) => setTimeout(res, 1000));
     }
   }

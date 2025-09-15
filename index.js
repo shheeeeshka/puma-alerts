@@ -27,7 +27,7 @@ if (!process.env.TELEGRAM_CHAT_ID) {
 export const CONFIG = {
   autoAssign: process.env.AUTO_ASSIGN !== "0",
   sprintWhitelist: process.env.SPRINT_WHITELIST
-    ? process.env.SPRINT_WHITELIST.split(",")
+    ? process.env.SPRINT_WHITELIST.split(",").map((s) => s.trim())
     : [],
   maxTasks: parseInt(process.env.MAX_TASKS) || 15,
   targetUrl: process.env.TARGET_URL,
@@ -65,47 +65,16 @@ async function cleanupScreenshot(path) {
   }
 }
 
-async function checkSprintWhitelist(page, taskKey) {
+async function checkSprintWhitelist(taskTitle) {
   if (CONFIG.sprintWhitelist.length === 0) return true;
 
-  try {
-    await page.goto(`${CONFIG.targetUrl}/${taskKey}`, {
-      waitUntil: "networkidle2",
-      timeout: 10000,
-    });
+  const sprintNumbers = taskTitle.match(/\[(\d+)\]/g);
+  if (!sprintNumbers) return false;
 
-    const hasWhitelistedSprint = await page.evaluate((whitelist) => {
-      const contentSelectors = [
-        ".issue-summary",
-        ".entity-description-desktop",
-        ".page-issue__content",
-        ".sidebar-category__list",
-        ".FieldView-Value",
-      ];
-
-      let pageText = "";
-      for (const selector of contentSelectors) {
-        const elements = document.querySelectorAll(selector);
-        for (const element of elements) {
-          if (element.offsetParent !== null) {
-            pageText += " " + element.textContent.toLowerCase();
-          }
-        }
-      }
-
-      return whitelist.some((sprint) => {
-        const sprintLower = sprint.toLowerCase().trim();
-        const regex = new RegExp(`\\b${sprintLower}\\b`, "i");
-        return regex.test(pageText);
-      });
-    }, CONFIG.sprintWhitelist);
-
-    await page.goBack({ waitUntil: "networkidle2" });
-    return hasWhitelistedSprint;
-  } catch (error) {
-    console.error("Ошибка проверки спринта:", error);
-    return false;
-  }
+  return sprintNumbers.some((sprint) => {
+    const sprintNumber = sprint.replace(/[\[\]]/g, "");
+    return CONFIG.sprintWhitelist.includes(sprintNumber);
+  });
 }
 
 async function getTasksInWork(page) {
@@ -155,19 +124,23 @@ async function clickTakeWorkButton(page) {
         'button[class*="take"]',
         'button[class*="work"]',
         ".prisma-button2",
+        "button:contains('Взять')",
+        "button:contains('Take')",
       ];
 
       for (const selector of buttonSelectors) {
-        const button = document.querySelector(selector);
-        if (button && button.offsetParent !== null) {
-          const text = button.textContent.toLowerCase();
-          if (
-            text.includes("взять") ||
-            text.includes("take") ||
-            text.includes("work")
-          ) {
-            button.click();
-            return true;
+        const buttons = Array.from(document.querySelectorAll(selector));
+        for (const button of buttons) {
+          if (button && button.offsetParent !== null) {
+            const text = button.textContent.toLowerCase();
+            if (
+              text.includes("взять") ||
+              text.includes("take") ||
+              text.includes("work")
+            ) {
+              button.click();
+              return true;
+            }
           }
         }
       }
@@ -355,68 +328,68 @@ async function processInitialTasks(page) {
     const tasksInWorkCount = tasksInWork.length;
 
     if (openTasks.length > 0) {
-      const validTasks = [];
-      for (const taskKey of openTasks) {
-        const shouldProcess = await checkSprintWhitelist(page, taskKey);
-        if (shouldProcess) {
-          validTasks.push({ key: taskKey, title: taskTitles[taskKey] });
-        }
-      }
+      const formattedDate = getFormattedDate();
+      const screenshotPath = `./screenshots/initial-tasks-${formattedDate}.png`;
 
-      if (validTasks.length > 0) {
-        const formattedDate = getFormattedDate();
-        const screenshotPath = `./screenshots/initial-tasks-${formattedDate}.png`;
+      await page.screenshot({
+        path: screenshotPath,
+        fullPage: true,
+      });
 
-        await page.screenshot({
-          path: screenshotPath,
-          fullPage: true,
+      try {
+        const tasksList = openTasks
+          .map((taskKey) => `• ${taskTitles[taskKey]}`)
+          .join("\n");
+        await notifier.sendAlert({
+          imagePath: screenshotPath,
+          link: CONFIG.targetBoardUrl,
+          caption: `🚀 <b>Обнаружены задачи при запуске!</b>\n\n${tasksList}\n\nВ работе: ${tasksInWorkCount}/${CONFIG.maxTasks}`,
+          showBoardButton: true,
         });
 
-        try {
-          const tasksList = validTasks
-            .map((task) => `• ${task.title}`)
-            .join("\n");
-          await notifier.sendAlert({
-            imagePath: screenshotPath,
-            link: CONFIG.targetBoardUrl,
-            caption: `🚀 <b>Обнаружены задачи при запуске!</b>\n\n${tasksList}\n\nВ работе: ${tasksInWorkCount}/${CONFIG.maxTasks}`,
-            showBoardButton: true,
-          });
-
-          if (CONFIG.autoAssign) {
-            let assignedCount = 0;
-            const assignedTasks = [];
-
-            for (const task of validTasks) {
-              if (tasksInWorkCount + assignedCount < CONFIG.maxTasks) {
-                const assigned = await assignTask(
-                  page,
-                  task.key,
-                  task.title,
-                  tasksInWorkCount + assignedCount
-                );
-                if (assigned) {
-                  assignedCount++;
-                  assignedTasks.push(task.title);
-                }
-              }
-            }
-
-            if (assignedCount > 0) {
-              await notifier.sendText(
-                `✅ Удалось взять в работу ${assignedCount} задач:\n${assignedTasks
-                  .map((task) => `• ${task}`)
-                  .join("\n")}\n📊 В работе: ${
-                  tasksInWorkCount + assignedCount
-                }/${CONFIG.maxTasks}`
-              );
+        if (CONFIG.autoAssign) {
+          const validTasks = [];
+          for (const taskKey of openTasks) {
+            const shouldProcess = await checkSprintWhitelist(
+              taskTitles[taskKey]
+            );
+            if (shouldProcess) {
+              validTasks.push({ key: taskKey, title: taskTitles[taskKey] });
             }
           }
 
-          await cleanupScreenshot(screenshotPath);
-        } catch (error) {
-          console.error("Ошибка отправки уведомления:", error);
+          let assignedCount = 0;
+          const assignedTasks = [];
+
+          for (const task of validTasks) {
+            if (tasksInWorkCount + assignedCount < CONFIG.maxTasks) {
+              const assigned = await assignTask(
+                page,
+                task.key,
+                task.title,
+                tasksInWorkCount + assignedCount
+              );
+              if (assigned) {
+                assignedCount++;
+                assignedTasks.push(task.title);
+              }
+            }
+          }
+
+          if (assignedCount > 0) {
+            await notifier.sendText(
+              `✅ Удалось взять в работу ${assignedCount} задач:\n${assignedTasks
+                .map((task) => `• ${task}`)
+                .join("\n")}\n📊 В работе: ${
+                tasksInWorkCount + assignedCount
+              }/${CONFIG.maxTasks}`
+            );
+          }
         }
+
+        await cleanupScreenshot(screenshotPath);
+      } catch (error) {
+        console.error("Ошибка отправки уведомления:", error);
       }
     }
 
@@ -496,7 +469,6 @@ async function trackTasks() {
         CONFIG.autoAssign ? "✅" : "❌"
       }\nЛимит задач: ${CONFIG.maxTasks}`
     );
-    await notifier.sendConfigMenu();
 
     while (true) {
       try {
@@ -528,74 +500,68 @@ async function trackTasks() {
           const tasksInWork = await getTasksInWork(page);
           const tasksInWorkCount = tasksInWork.length;
 
-          if (tasksInWorkCount >= CONFIG.maxTasks) {
-            await notifier.sendText(
-              `⚠️ Достигнут лимит задач в работе: ${tasksInWorkCount}/${CONFIG.maxTasks}\nНовые задачи не будут взяты автоматически.`
-            );
-          }
+          const formattedDate = getFormattedDate();
+          const screenshotPath = `./screenshots/new-tasks-${formattedDate}.png`;
 
-          const validTasks = [];
-          for (const taskKey of newOpenTasks) {
-            const shouldProcess = await checkSprintWhitelist(page, taskKey);
-            if (shouldProcess) {
-              validTasks.push({ key: taskKey, title: taskTitles[taskKey] });
-            }
-          }
+          await page.screenshot({
+            path: screenshotPath,
+            fullPage: true,
+          });
 
-          if (validTasks.length > 0) {
-            const formattedDate = getFormattedDate();
-            const screenshotPath = `./screenshots/new-tasks-${formattedDate}.png`;
-
-            await page.screenshot({
-              path: screenshotPath,
-              fullPage: true,
+          try {
+            const tasksList = newOpenTasks
+              .map((taskKey) => `• ${taskTitles[taskKey]}`)
+              .join("\n");
+            await notifier.sendAlert({
+              imagePath: screenshotPath,
+              link: CONFIG.targetBoardUrl,
+              caption: `🚀 <b>Обнаружены новые задачи!</b>\n\n${tasksList}\n\nВ работе: ${tasksInWorkCount}/${CONFIG.maxTasks}`,
+              showBoardButton: true,
             });
 
-            try {
-              const tasksList = validTasks
-                .map((task) => `• ${task.title}`)
-                .join("\n");
-              await notifier.sendAlert({
-                imagePath: screenshotPath,
-                link: CONFIG.targetBoardUrl,
-                caption: `🚀 <b>Обнаружены новые задачи!</b>\n\n${tasksList}\n\nВ работе: ${tasksInWorkCount}/${CONFIG.maxTasks}`,
-                showBoardButton: true,
-              });
-
-              if (CONFIG.autoAssign) {
-                let assignedCount = 0;
-                const assignedTasks = [];
-
-                for (const task of validTasks) {
-                  if (tasksInWorkCount + assignedCount < CONFIG.maxTasks) {
-                    const assigned = await assignTask(
-                      page,
-                      task.key,
-                      task.title,
-                      tasksInWorkCount + assignedCount
-                    );
-                    if (assigned) {
-                      assignedCount++;
-                      assignedTasks.push(task.title);
-                    }
-                  }
-                }
-
-                if (assignedCount > 0) {
-                  await notifier.sendText(
-                    `✅ Удалось взять в работу ${assignedCount} задач:\n${assignedTasks
-                      .map((task) => `• ${task}`)
-                      .join("\n")}\n📊 В работе: ${
-                      tasksInWorkCount + assignedCount
-                    }/${CONFIG.maxTasks}`
-                  );
+            if (CONFIG.autoAssign && tasksInWorkCount < CONFIG.maxTasks) {
+              const validTasks = [];
+              for (const taskKey of newOpenTasks) {
+                const shouldProcess = await checkSprintWhitelist(
+                  taskTitles[taskKey]
+                );
+                if (shouldProcess) {
+                  validTasks.push({ key: taskKey, title: taskTitles[taskKey] });
                 }
               }
 
-              await cleanupScreenshot(screenshotPath);
-            } catch (error) {
-              console.error("Ошибка отправки уведомления:", error);
+              let assignedCount = 0;
+              const assignedTasks = [];
+
+              for (const task of validTasks) {
+                if (tasksInWorkCount + assignedCount < CONFIG.maxTasks) {
+                  const assigned = await assignTask(
+                    page,
+                    task.key,
+                    task.title,
+                    tasksInWorkCount + assignedCount
+                  );
+                  if (assigned) {
+                    assignedCount++;
+                    assignedTasks.push(task.title);
+                  }
+                }
+              }
+
+              if (assignedCount > 0) {
+                await notifier.sendText(
+                  `✅ Удалось взять в работу ${assignedCount} задач:\n${assignedTasks
+                    .map((task) => `• ${task}`)
+                    .join("\n")}\n📊 В работе: ${
+                    tasksInWorkCount + assignedCount
+                  }/${CONFIG.maxTasks}`
+                );
+              }
             }
+
+            await cleanupScreenshot(screenshotPath);
+          } catch (error) {
+            console.error("Ошибка отправки уведомления:", error);
           }
         }
 
@@ -634,3 +600,25 @@ import express from "express";
 const app = express();
 app.get("/health", (req, res) => res.status(200).send("OK"));
 app.listen(process.env.PORT || 3000);
+
+app.use(express.json());
+app.post("/webhook", async (req, res) => {
+  try {
+    const update = req.body;
+
+    if (update.message) {
+      await notifier.handleMessage(update.message);
+    }
+
+    if (update.callback_query) {
+      await notifier.handleCallback(update.callback_query);
+    }
+
+    res.status(200).send("OK");
+  } catch (error) {
+    console.error("Ошибка обработки webhook:", error);
+    res.status(500).send("Error");
+  }
+});
+
+notifier.startPolling();
