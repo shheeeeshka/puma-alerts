@@ -12,6 +12,10 @@ import MailService from "./mailService.js";
 
 config();
 
+let monitoringActive = true;
+let currentBrowser = null;
+let currentPage = null;
+
 const notifier = new TelegramNotifier({
   botToken: process.env.TELEGRAM_BOT_TOKEN,
   chatId: process.env.TELEGRAM_CHAT_ID,
@@ -444,11 +448,33 @@ async function getNewOpenTasks(page, prevOpenTaskKeys) {
   };
 }
 
+async function stopMonitoring() {
+  monitoringActive = false;
+  if (currentBrowser) {
+    await currentBrowser.close().catch(console.error);
+    currentBrowser = null;
+    currentPage = null;
+  }
+}
+
+async function startMonitoring() {
+  monitoringActive = true;
+  await trackTasks();
+}
+
+export async function restartMonitoring() {
+  await stopMonitoring();
+  await sleep(10);
+  await startMonitoring();
+}
+
 async function trackTasks() {
   let browser;
   try {
     browser = await puppeteer.launch(browserConfig);
+    currentBrowser = browser;
     const page = await browser.newPage();
+    currentPage = page;
 
     await page.goto(CONFIG.targetBoardUrl, {
       waitUntil: "networkidle2",
@@ -470,7 +496,7 @@ async function trackTasks() {
       }\nЛимит задач: ${CONFIG.maxTasks}`
     );
 
-    while (true) {
+    while (monitoringActive) {
       try {
         await page.reload({ waitUntil: "networkidle2" });
         await sleep(2);
@@ -586,15 +612,16 @@ async function trackTasks() {
   } catch (error) {
     console.error("Критическая ошибка:", error);
     await notifier.sendText(`Мониторинг остановлен: ${error.message}`);
-    process.exit(1);
   } finally {
-    if (browser) {
+    if (browser && monitoringActive) {
       await browser.close().catch(console.error);
+      currentBrowser = null;
+      currentPage = null;
     }
   }
 }
 
-trackTasks();
+startMonitoring();
 
 import express from "express";
 const app = express();

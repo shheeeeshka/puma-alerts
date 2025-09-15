@@ -2,7 +2,7 @@ import fs from "fs";
 import axios from "axios";
 import path from "path";
 import { fileURLToPath } from "url";
-import { CONFIG } from "./index.js";
+import { CONFIG, restartMonitoring } from "./index.js";
 
 class TelegramNotifier {
   constructor({ botToken, chatId }) {
@@ -240,6 +240,12 @@ class TelegramNotifier {
         // ],
         // [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
         // [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
+        // [
+        //   {
+        //     text: "🔄 Перезапустить мониторинг",
+        //     callback_data: "restart_monitoring",
+        //   },
+        // ],
       ],
     };
 
@@ -280,7 +286,7 @@ class TelegramNotifier {
             message.message_id,
             `Автозабор задач ${
               CONFIG.autoAssign ? "✅ включен" : "❌ выключен"
-            }`
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
           );
           await this.sendConfigMenu();
           break;
@@ -292,7 +298,7 @@ class TelegramNotifier {
             message.message_id,
             `Авторизация ${
               CONFIG.authRequired ? "✅ включена" : "❌ выключена"
-            }`
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
           );
           await this.sendConfigMenu();
           break;
@@ -312,6 +318,14 @@ class TelegramNotifier {
         case "change_target_url":
           this.waitingForInput = "target_url";
           await this.sendText("Введите новый URL доски:");
+          break;
+
+        case "restart_monitoring":
+          await this.editMessage(
+            message.message_id,
+            "🔄 Перезапуск мониторинга..."
+          );
+          await restartMonitoring();
           break;
 
         default:
@@ -336,7 +350,9 @@ class TelegramNotifier {
           if (text.match(/^\d+$/)) {
             CONFIG.maxTasks = parseInt(text);
             process.env.MAX_TASKS = text;
-            await this.sendText(`✅ Лимит задач изменен на: ${text}`);
+            await this.sendText(
+              `✅ Лимит задач изменен на: ${text}\n\nДля применения изменений требуется перезапуск мониторинга.`
+            );
             await this.sendConfigMenu();
           } else {
             await this.sendText("❌ Введите корректное число");
@@ -352,7 +368,7 @@ class TelegramNotifier {
           await this.sendText(
             `✅ Вайтлист спринтов изменен: ${
               CONFIG.sprintWhitelist.join(", ") || "очищен"
-            }`
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
           );
           await this.sendConfigMenu();
           this.waitingForInput = null;
@@ -362,7 +378,9 @@ class TelegramNotifier {
           if (text.startsWith("http")) {
             CONFIG.targetBoardUrl = text;
             process.env.TARGET_BOARD_URL = text;
-            await this.sendText(`✅ URL доски изменен на: ${text}`);
+            await this.sendText(
+              `✅ URL доски изменен на: ${text}\n\nДля применения изменений требуется перезапуск мониторинга.`
+            );
             await this.sendConfigMenu();
           } else {
             await this.sendText("❌ Введите корректный URL");
@@ -393,6 +411,12 @@ class TelegramNotifier {
 
     if (text === "⚙️ Панель управления") {
       await this.sendConfigMenu();
+      return;
+    }
+
+    if (text === "/restart") {
+      await this.sendText("🔄 Перезапуск мониторинга...");
+      await restartMonitoring();
       return;
     }
   }
