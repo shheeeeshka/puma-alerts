@@ -10,6 +10,7 @@ class TaskManager {
     this.processedTasks = new Set();
     this.tasksTaken = 0;
     this.monitoringActive = false;
+    this.lastTaskCount = 0;
   }
 
   async startMonitoring() {
@@ -30,7 +31,8 @@ class TaskManager {
         const buttonSelectors = [
           "button.review-header__button-take",
           ".prisma-button2",
-          "button",
+          'button[class*="take"]',
+          'button[class*="work"]',
         ];
 
         for (const selector of buttonSelectors) {
@@ -55,7 +57,7 @@ class TaskManager {
       });
 
       if (buttonFound) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await sleep(2);
         return true;
       }
       return false;
@@ -86,7 +88,7 @@ class TaskManager {
         timeout: 15000,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sleep(3);
 
       const takeButtonClicked = await this.clickTakeWorkButton(page);
       if (!takeButtonClicked) {
@@ -94,8 +96,7 @@ class TaskManager {
         return false;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
+      await sleep(5);
       await this.browserManager.reloadPage();
 
       this.tasksTaken++;
@@ -144,32 +145,43 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
+      await sleep(3);
 
       const result = await page.evaluate(() => {
-        const normalTasksSection = Array.from(
-          document.querySelectorAll(
-            ".collapse-widget-header__title-item_primary"
-          )
-        ).find((header) => header.textContent.includes("Обычные задачи"));
+        const sections = Array.from(document.querySelectorAll(".g-disclosure"));
 
+        let normalTasksSection = null;
         let normalTasks = [];
         let taskTitles = {};
 
+        for (const section of sections) {
+          const header = section.querySelector(
+            ".collapse-widget-header__title-item_primary"
+          );
+          if (header && header.textContent.includes("Обычные задачи")) {
+            normalTasksSection = section;
+            break;
+          }
+        }
+
         if (normalTasksSection) {
-          const table = normalTasksSection
-            .closest(".g-disclosure")
-            .querySelector("table");
+          const table = normalTasksSection.querySelector("table");
           if (table) {
             const rows = table.querySelectorAll("tbody tr[data-key]");
 
             rows.forEach((row) => {
               const key = row.getAttribute("data-key");
-              const titleElement = row.querySelector(".edit-cell__text");
-              const title = titleElement
-                ? titleElement.textContent.trim()
-                : key;
-              normalTasks.push(key);
-              taskTitles[key] = title;
+              if (key) {
+                const titleElement =
+                  row.querySelector(".edit-cell__text") ||
+                  row.querySelector('a[href*="/browse/"]') ||
+                  row.querySelector("td:first-child");
+                const title = titleElement
+                  ? titleElement.textContent.trim()
+                  : key;
+                normalTasks.push(key);
+                taskTitles[key] = title;
+              }
             });
           }
         }
@@ -177,16 +189,26 @@ class TaskManager {
         return {
           normalTaskKeys: normalTasks,
           taskTitles: taskTitles,
+          taskCount: normalTasks.length,
         };
       });
+
+      logger.debug(
+        {
+          taskCount: result.normalTaskKeys.length,
+          tasks: result.normalTaskKeys,
+        },
+        "Найдены задачи в секции 'Обычные задачи'"
+      );
 
       return {
         normalTasks: result.normalTaskKeys,
         taskTitles: result.taskTitles,
+        taskCount: result.taskCount,
       };
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка получения задач");
-      return { normalTasks: [], taskTitles: {} };
+      return { normalTasks: [], taskTitles: {}, taskCount: 0 };
     }
   }
 
@@ -208,8 +230,10 @@ class TaskManager {
           filteredTitles[taskKey] = title;
         }
       } else {
-        filteredTasks.push(taskKey);
-        filteredTitles[taskKey] = title;
+        if (CONFIG.sprintWhitelist.length === 0) {
+          filteredTasks.push(taskKey);
+          filteredTitles[taskKey] = title;
+        }
       }
     }
 
@@ -257,7 +281,7 @@ class TaskManager {
             if (assigned) {
               assignedTasks.push(filteredTitles[taskKey]);
             }
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            await sleep(1);
           }
         }
 
@@ -282,10 +306,16 @@ class TaskManager {
     const page = this.browserManager.getPage();
     try {
       const isAuthRequired = await page.evaluate(() => {
-        return (
-          document.querySelector(
-            'input[type="password"], input[name="password"]'
-          ) !== null
+        const authSelectors = [
+          'input[type="password"]',
+          'input[name="password"]',
+          ".passport-Domik",
+          ".passport-AccountList",
+          'a[href*="passport.yandex-team.ru"]',
+        ];
+
+        return authSelectors.some(
+          (selector) => document.querySelector(selector) !== null
         );
       });
 
@@ -313,10 +343,13 @@ class TaskManager {
 
       if (CONFIG.authRequired) {
         logger.info("Ожидание аутентификации...");
-        await new Promise((resolve) => setTimeout(resolve, 240000));
+        await sleep(240);
       }
 
-      const { normalTasks, taskTitles } = await this.getNormalTasks();
+      const { normalTasks, taskTitles, taskCount } =
+        await this.getNormalTasks();
+      this.lastTaskCount = taskCount;
+
       await this.processTasks(normalTasks, taskTitles, true);
 
       let prevNormalTaskKeys = normalTasks;
@@ -324,7 +357,7 @@ class TaskManager {
       await this.notifier.sendText(
         `🚀 Мониторинг начат\nАвтозабор: ${
           CONFIG.autoAssign ? "✅" : "❌"
-        }\nЛимит задач: ${CONFIG.maxTasks}`
+        }\nЛимит задач: ${CONFIG.maxTasks}\nЗадач в секции: ${taskCount}`
       );
 
       while (this.monitoringActive) {
@@ -337,23 +370,38 @@ class TaskManager {
             break;
           }
 
-          await new Promise((resolve) => setTimeout(resolve, 5000));
+          await sleep(5);
 
-          const { normalTasks: currentTasks, taskTitles: currentTitles } =
-            await this.getNormalTasks();
+          const {
+            normalTasks: currentTasks,
+            taskTitles: currentTitles,
+            taskCount: currentCount,
+          } = await this.getNormalTasks();
+
+          if (currentCount !== this.lastTaskCount) {
+            logger.info(
+              {
+                previousCount: this.lastTaskCount,
+                currentCount: currentCount,
+              },
+              "Изменение количества задач"
+            );
+            this.lastTaskCount = currentCount;
+          }
 
           const newTasks = currentTasks.filter(
             (task) => !prevNormalTaskKeys.includes(task)
           );
 
           if (newTasks.length > 0) {
+            logger.info({ newTasks }, "Обнаружены новые задачи");
             await this.processTasks(newTasks, currentTitles, false);
           }
 
           prevNormalTaskKeys = currentTasks;
           errorCount = 0;
 
-          await new Promise((resolve) => setTimeout(resolve, 10000));
+          await sleep(10);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -367,7 +415,7 @@ class TaskManager {
             );
           }
 
-          await new Promise((resolve) => setTimeout(resolve, 15000));
+          await sleep(15);
         }
       }
     } catch (error) {
