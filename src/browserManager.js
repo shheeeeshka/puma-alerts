@@ -15,9 +15,9 @@ class BrowserManager {
   }
 
   async getBrowserConfig() {
-    const userDataDir =
-      process.env.USER_DATA_DIR ||
-      path.join(os.tmpdir(), "puppeteer_user_data");
+    const userDataDir = process.env.USER_DATA_DIR
+      ? path.resolve(process.env.USER_DATA_DIR)
+      : path.join(os.tmpdir(), "puppeteer_user_data");
 
     const baseConfig = {
       args: [
