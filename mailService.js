@@ -2,8 +2,12 @@ import nodemailer from "nodemailer";
 import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
+import logger from "./logger.js";
 
 config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class MailService {
   constructor() {
@@ -19,37 +23,45 @@ class MailService {
   }
 
   async sendAlertMail(imageName = "", link = "", message = "") {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const imagePath = path.join(__dirname, "screenshots", imageName);
-
-    const emailContent = message
-      ? `<div style="text-align: center;">
-                <p>${message}</p>
-                <a href="${link}">Перейти к задаче</a>
-            </div>`
-      : `<div style="text-align: center;">
-                <p>Появилась новая задача</p>
-                <a href="${link}">Перейти к задаче</a>
-            </div>`;
-
-    const mailOptions = {
-      from: process.env.SMTP_USER,
-      to: process.env.SMTP_RECIPIENT,
-      subject: message ? "Статус задачи" : "Новая задача в трекере",
-      html: emailContent,
-    };
-
-    if (imageName && fs.existsSync(imagePath)) {
-      mailOptions.attachments = [
-        {
-          filename: imageName,
-          path: imagePath,
-        },
-      ];
+    if (!process.env.SMTP_USER || !process.env.SMTP_RECIPIENT) {
+      logger.warn("SMTP настройки не заданы, пропускаем отправку email");
+      return;
     }
 
-    await this.transporter.sendMail(mailOptions);
+    try {
+      const imagePath = path.join(__dirname, "screenshots", imageName);
+
+      const emailContent = message
+        ? `<div style="text-align: center;">
+                  <p>${message}</p>
+                  <a href="${link}">Перейти к задаче</a>
+              </div>`
+        : `<div style="text-align: center;">
+                  <p>Появилась новая задача</p>
+                  <a href="${link}">Перейти к задаче</a>
+              </div>`;
+
+      const mailOptions = {
+        from: process.env.SMTP_USER,
+        to: process.env.SMTP_RECIPIENT,
+        subject: message ? "Статус задачи" : "Новая задача в трекере",
+        html: emailContent,
+      };
+
+      if (imageName && fs.existsSync(imagePath)) {
+        mailOptions.attachments = [
+          {
+            filename: imageName,
+            path: imagePath,
+          },
+        ];
+      }
+
+      await this.transporter.sendMail(mailOptions);
+      logger.info("Email уведомление отправлено");
+    } catch (error) {
+      logger.error({ error }, "Ошибка отправки email");
+    }
   }
 }
 

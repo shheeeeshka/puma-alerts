@@ -1,8 +1,13 @@
-import fs from "fs";
 import axios from "axios";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { CONFIG, restartMonitoring } from "./index.js";
+import logger from "./logger.js";
+import { restartMonitoring } from "./index.js";
+import CONFIG from "./config.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class TelegramNotifier {
   constructor({ botToken, chatId }) {
@@ -19,7 +24,7 @@ class TelegramNotifier {
   }
 
   async startPolling() {
-    console.log("Запуск long polling для обработки callback-ов...");
+    logger.info("Запуск long polling для обработки callback-ов...");
     let offset = 0;
 
     this.pollingInterval = setInterval(async () => {
@@ -47,7 +52,7 @@ class TelegramNotifier {
         }
       } catch (error) {
         if (error.response?.status !== 409) {
-          console.error("Ошибка long polling:", error.message);
+          logger.error({ error }, "Ошибка long polling");
         }
       }
     }, 1000);
@@ -66,7 +71,9 @@ class TelegramNotifier {
         chat_id: this.chatId,
         message_id: messageId,
       });
-    } catch (error) {}
+    } catch (error) {
+      logger.debug({ error }, "Не удалось удалить сообщение");
+    }
   }
 
   async editMessage(messageId, text, keyboard = null) {
@@ -83,14 +90,17 @@ class TelegramNotifier {
       }
 
       await axios.post(`${this.apiUrl}/editMessageText`, data);
-    } catch (error) {}
+    } catch (error) {
+      logger.error({ error }, "Ошибка редактирования сообщения");
+    }
   }
 
   async sendText(message, keyboard = null, isConfigMenu = false) {
     if (!this.chatId) {
-      console.warn("chatId не задан");
+      logger.warn("chatId не задан, пропускаем отправку сообщения");
       return;
     }
+
     try {
       if (this.lastMessageId && this.waitingForInput) {
         await this.deleteMessage(this.lastMessageId);
@@ -114,8 +124,10 @@ class TelegramNotifier {
         this.configMenuMessageId = this.lastMessageId;
       }
 
+      logger.debug("Сообщение отправлено в Telegram");
       return response.data;
     } catch (error) {
+      logger.error({ error }, "Ошибка отправки сообщения в Telegram");
       throw error;
     }
   }
@@ -124,8 +136,6 @@ class TelegramNotifier {
     if (!this.chatId) return;
 
     try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
       const fullImagePath = path.join(__dirname, imagePath);
 
       if (!fs.existsSync(fullImagePath)) {
@@ -151,7 +161,10 @@ class TelegramNotifier {
       await axios.post(`${this.apiUrl}/sendPhoto`, formData, {
         headers: formData.getHeaders(),
       });
+
+      logger.debug("Уведомление с изображением отправлено");
     } catch (error) {
+      logger.error({ error }, "Ошибка отправки уведомления с изображением");
       throw error;
     }
   }
@@ -160,16 +173,13 @@ class TelegramNotifier {
     taskImagePath,
     boardImagePath,
     link,
-    tasksInWork,
+    tasksTaken,
     maxTasks,
     message = "",
   }) {
     if (!this.chatId) return;
 
     try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-
       const FormData = (await import("form-data")).default;
       const formData = new FormData();
 
@@ -207,7 +217,10 @@ class TelegramNotifier {
       await axios.post(`${this.apiUrl}/sendMediaGroup`, formData, {
         headers: formData.getHeaders(),
       });
+
+      logger.debug("Двойное уведомление отправлено");
     } catch (error) {
+      logger.error({ error }, "Ошибка отправки двойного уведомления");
       throw error;
     }
   }
@@ -216,36 +229,36 @@ class TelegramNotifier {
     const keyboard = {
       inline_keyboard: [
         [{ text: "📊 Текущая конфигурация", callback_data: "show_config" }],
-        // [
-        //   {
-        //     text: CONFIG.autoAssign
-        //       ? "🔴 Выключить автозабор"
-        //       : "🟢 Включить автозабор",
-        //     callback_data: "toggle_autoassign",
-        //   },
-        // ],
-        // [
-        //   {
-        //     text: CONFIG.authRequired
-        //       ? "🔴 Выключить авторизацию"
-        //       : "🟢 Включить авторизацию",
-        //     callback_data: "toggle_auth",
-        //   },
-        // ],
-        // [
-        //   {
-        //     text: "🎯 Лимит задач: " + CONFIG.maxTasks,
-        //     callback_data: "change_max_tasks",
-        //   },
-        // ],
-        // [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
-        // [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
-        // [
-        //   {
-        //     text: "🔄 Перезапустить мониторинг",
-        //     callback_data: "restart_monitoring",
-        //   },
-        // ],
+        [
+          {
+            text: CONFIG.autoAssign
+              ? "🔴 Выключить автозабор"
+              : "🟢 Включить автозабор",
+            callback_data: "toggle_autoassign",
+          },
+        ],
+        [
+          {
+            text: CONFIG.authRequired
+              ? "🔴 Выключить авторизацию"
+              : "🟢 Включить авторизацию",
+            callback_data: "toggle_auth",
+          },
+        ],
+        [
+          {
+            text: "🎯 Лимит задач: " + CONFIG.maxTasks,
+            callback_data: "change_max_tasks",
+          },
+        ],
+        [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
+        [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
+        [
+          {
+            text: "🔄 Перезапустить мониторинг",
+            callback_data: "restart_monitoring",
+          },
+        ],
       ],
     };
 
@@ -336,7 +349,9 @@ class TelegramNotifier {
         callback_query_id: id,
         text: "Команда выполнена",
       });
-    } catch (error) {}
+    } catch (error) {
+      logger.error({ error }, "Ошибка обработки callback");
+    }
   }
 
   async handleMessage(message) {
@@ -422,8 +437,9 @@ class TelegramNotifier {
   }
 
   async listenForChatId() {
-    console.log("Ожидание сообщения для получения chatId...");
+    logger.info("Ожидание сообщения для получения chatId...");
     let offset = 0;
+
     while (true) {
       try {
         const response = await axios.get(`${this.apiUrl}/getUpdates`, {
@@ -457,7 +473,9 @@ class TelegramNotifier {
         if (updates.length > 0) {
           offset = updates[updates.length - 1].update_id + 1;
         }
-      } catch (err) {}
+      } catch (err) {
+        logger.error({ err }, "Ошибка получения chatId");
+      }
       await new Promise((res) => setTimeout(res, 1000));
     }
   }
