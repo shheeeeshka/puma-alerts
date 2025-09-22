@@ -84,19 +84,69 @@ class TaskManager {
     try {
       logger.info({ taskKey, taskTitle }, "Попытка взять задачу в работу");
 
-      await this.browserManager.navigateTo(`${CONFIG.targetUrl}/${taskKey}`, {
-        timeout: 15000,
-      });
+      const taskClicked = await page.evaluate((taskKey) => {
+        const taskSelector = `tr[data-key="${taskKey}"] a[href*="/browse/"]`;
+        const taskLink = document.querySelector(taskSelector);
 
-      await sleep(3);
+        if (taskLink) {
+          taskLink.click();
+          return true;
+        }
+        return false;
+      }, taskKey);
 
-      const takeButtonClicked = await this.clickTakeWorkButton(page);
-      if (!takeButtonClicked) {
-        logger.warn({ taskKey }, 'Не удалось найти кнопку "Взять в работу"');
+      if (!taskClicked) {
+        logger.warn({ taskKey }, "Не удалось найти ссылку задачи для клика");
         return false;
       }
 
       await sleep(5);
+
+      const takeButtonClicked = await this.clickTakeWorkButton(page);
+      if (!takeButtonClicked) {
+        logger.warn({ taskKey }, 'Не удалось найти кнопку "Взять в работу"');
+
+        await page.evaluate(() => {
+          const closeButtons = [
+            'button[aria-label="Close"]',
+            ".modal-close",
+            ".close-button",
+            'button[class*="close"]',
+          ];
+
+          for (const selector of closeButtons) {
+            const button = document.querySelector(selector);
+            if (button) {
+              button.click();
+              break;
+            }
+          }
+        });
+
+        await sleep(2);
+        return false;
+      }
+
+      await sleep(5);
+
+      await page.evaluate(() => {
+        const closeButtons = [
+          'button[aria-label="Close"]',
+          ".modal-close",
+          ".close-button",
+          'button[class*="close"]',
+        ];
+
+        for (const selector of closeButtons) {
+          const button = document.querySelector(selector);
+          if (button) {
+            button.click();
+            break;
+          }
+        }
+      });
+
+      await sleep(2);
       await this.browserManager.reloadPage();
 
       this.tasksTaken++;
