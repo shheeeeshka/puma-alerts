@@ -1,7 +1,6 @@
-import { sleep, checkSprintWhitelist, getFormattedDate } from "./utils.js";
+import { sleep, checkSprintWhitelist } from "./utils.js";
 import CONFIG from "./config.js";
 import logger from "./logger.js";
-import mailService from "./mailService.js";
 
 class TaskManager {
   constructor(browserManager, notifier) {
@@ -25,165 +24,213 @@ class TaskManager {
     logger.info("Остановка мониторинга");
   }
 
-  async clickTakeWorkButton(page) {
+  async extractTaskUrlFromModal(page) {
     try {
-      const buttonFound = await page.evaluate(() => {
-        const buttonSelectors = [
-          "button.review-header__button-take",
-          ".prisma-button2",
+      const url = await page.evaluate(() => {
+        const greenBorderElement = document.querySelector(
+          '.yfm__wacko[style*="border:2px solid green"]'
+        );
+        if (!greenBorderElement) return null;
+
+        const linkElement = greenBorderElement.querySelector(
+          'a[href*="praktikum-admin.yandex-team.ru"]'
+        );
+        return linkElement ? linkElement.href : null;
+      });
+
+      if (url) {
+        logger.info({ url }, "Найдена ссылка на задачу в модальном окне");
+        return url;
+      }
+      return null;
+    } catch (error) {
+      logger.error(
+        { error: error.message },
+        "Ошибка извлечения URL из модального окна"
+      );
+      return null;
+    }
+  }
+
+  async takeTaskOnPraktikumPage(taskPage, taskUrl) {
+    try {
+      await taskPage.bringToFront();
+
+      const buttonClicked = await taskPage.evaluate(() => {
+        const buttons = [
           'button[class*="take"]',
           'button[class*="work"]',
+          'button[class*="assign"]',
+          ".prisma-button2",
+          'button[type="button"]',
         ];
 
-        for (const selector of buttonSelectors) {
-          const buttons = Array.from(document.querySelectorAll(selector));
-          for (const button of buttons) {
-            if (button && button.offsetParent !== null) {
-              const text = button.textContent.toLowerCase();
-              if (
-                text.includes("взять") ||
-                text.includes("take") ||
-                text.includes("work") ||
-                text.includes("₽") ||
-                text.includes("руб")
-              ) {
-                button.click();
-                return true;
-              }
+        for (const selector of buttons) {
+          const elements = document.querySelectorAll(selector);
+          for (const element of elements) {
+            const text = element.textContent.toLowerCase();
+            if (
+              text.includes("взять") ||
+              text.includes("take") ||
+              text.includes("work") ||
+              text.includes("assign")
+            ) {
+              element.click();
+              return true;
             }
           }
         }
         return false;
       });
 
-      if (buttonFound) {
+      if (buttonClicked) {
         await sleep(2);
-        return true;
+
+        const success = await taskPage.evaluate(() => {
+          const successIndicators = [
+            'button[class*="taken"]',
+            'button[class*="assigned"]',
+            ".status-success",
+            ".alert-success",
+          ];
+
+          return successIndicators.some((selector) =>
+            document.querySelector(selector)
+          );
+        });
+
+        if (success) {
+          logger.info("Задача успешно взята в работу");
+          return true;
+        }
       }
+
       return false;
     } catch (error) {
       logger.error(
         { error: error.message },
-        'Ошибка при нажатии кнопки "Взять в работу"'
+        "Ошибка взятия задачи на странице практикума"
       );
       return false;
     }
   }
 
-  async assignTask(taskKey, taskTitle) {
+  async handleTaskAssignment(taskKey, taskTitle) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
       return false;
     }
 
-    const page = this.browserManager.getPage();
-    if (!page) {
-      logger.error("Страница не доступна для взятия задачи");
+    const mainPage = this.browserManager.getPage();
+    if (!mainPage) {
+      logger.error("Основная страница не доступна");
       return false;
     }
 
     try {
-      logger.info({ taskKey, taskTitle }, "Попытка взять задачу в работу");
+      logger.info({ taskKey, taskTitle }, "Обработка задачи");
 
-      const taskClicked = await page.evaluate((taskKey) => {
-        const taskSelector = `tr[data-key="${taskKey}"] a[href*="/browse/"]`;
-        const taskLink = document.querySelector(taskSelector);
+      const taskClicked = await mainPage.evaluate((taskKey) => {
+        const selectors = [
+          `tr[data-key="${taskKey}"]`,
+          `[data-key="${taskKey}"]`,
+          `a[href*="${taskKey}"]`,
+        ];
 
-        if (taskLink) {
-          taskLink.click();
-          return true;
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            element.click();
+            return true;
+          }
         }
         return false;
       }, taskKey);
 
       if (!taskClicked) {
-        logger.warn({ taskKey }, "Не удалось найти ссылку задачи для клика");
+        logger.warn({ taskKey }, "Не удалось кликнуть на задачу");
         return false;
       }
 
-      await sleep(5);
+      await sleep(3);
 
-      const takeButtonClicked = await this.clickTakeWorkButton(page);
-      if (!takeButtonClicked) {
-        logger.warn({ taskKey }, 'Не удалось найти кнопку "Взять в работу"');
+      const taskUrl = await this.extractTaskUrlFromModal(mainPage);
+      if (!taskUrl) {
+        logger.warn(
+          { taskKey },
+          "Не найдена ссылка на задачу в модальном окне"
+        );
+        await this.closeModal(mainPage);
+        return false;
+      }
 
-        await page.evaluate(() => {
-          const closeButtons = [
-            'button[aria-label="Close"]',
-            ".modal-close",
-            ".close-button",
-            'button[class*="close"]',
-          ];
+      const taskPage = await this.browserManager.openNewTab();
+      if (!taskPage) {
+        logger.error("Не удалось открыть новую вкладку");
+        await this.closeModal(mainPage);
+        return false;
+      }
 
-          for (const selector of closeButtons) {
-            const button = document.querySelector(selector);
-            if (button) {
-              button.click();
-              break;
-            }
-          }
+      try {
+        await taskPage.goto(taskUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
         });
-
         await sleep(2);
-        return false;
+
+        const assigned = await this.takeTaskOnPraktikumPage(taskPage, taskUrl);
+
+        if (assigned) {
+          this.tasksTaken++;
+          logger.info(
+            { taskKey, tasksTaken: this.tasksTaken },
+            "Задача взята в работу"
+          );
+
+          await this.notifier.sendText(
+            `✅ Задача взята в работу\n"${taskTitle}"\n📊 Взято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`
+          );
+        }
+
+        return assigned;
+      } finally {
+        await taskPage.close();
+        await mainPage.bringToFront();
+        await this.closeModal(mainPage);
+        await sleep(1);
       }
+    } catch (error) {
+      logger.error(
+        { error: error.message, taskKey },
+        "Ошибка обработки задачи"
+      );
+      await this.closeModal(mainPage);
+      return false;
+    }
+  }
 
-      await sleep(5);
-
+  async closeModal(page) {
+    try {
       await page.evaluate(() => {
-        const closeButtons = [
+        const closeSelectors = [
           'button[aria-label="Close"]',
           ".modal-close",
           ".close-button",
-          'button[class*="close"]',
+          '[class*="close"]',
+          ".g-modal-close",
         ];
 
-        for (const selector of closeButtons) {
-          const button = document.querySelector(selector);
-          if (button) {
-            button.click();
-            break;
+        for (const selector of closeSelectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            element.click();
+            return true;
           }
         }
+        return false;
       });
-
-      await sleep(2);
-      await this.browserManager.reloadPage();
-
-      this.tasksTaken++;
-      logger.info(
-        { taskKey, tasksTaken: this.tasksTaken },
-        "Задача взята в работу"
-      );
-
-      try {
-        await this.notifier.sendText(
-          `✅ Задача взята в работу\n"${taskTitle}"\n📊 Взято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`
-        );
-      } catch (error) {
-        logger.error(
-          { error: error.message },
-          "Ошибка отправки уведомления в Telegram"
-        );
-        await mailService.sendAlertMail(
-          "",
-          `${CONFIG.targetUrl}/${taskKey}`,
-          `Задача "${taskTitle}" взята в работу\nВзято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`
-        );
-      }
-
-      if (this.tasksTaken >= CONFIG.maxTasks) {
-        await this.notifier.sendText(
-          `🎯 Достигнут лимит задач (${CONFIG.maxTasks}). Автозабор отключен.`
-        );
-      }
-
-      return true;
+      await sleep(1);
     } catch (error) {
-      logger.error({ error: error.message, taskKey }, "Ошибка взятия задачи");
-      await this.notifier.sendText(
-        `❌ Ошибка взятия задачи "${taskTitle}": ${error.message}`
-      );
-      return false;
+      logger.debug("Ошибка закрытия модального окна");
     }
   }
 
@@ -198,48 +245,51 @@ class TaskManager {
       await sleep(3);
 
       const result = await page.evaluate(() => {
-        const sections = Array.from(document.querySelectorAll(".g-disclosure"));
-
-        let normalTasksSection = null;
-        let normalTasks = [];
-        let taskTitles = {};
-
-        for (const section of sections) {
-          const header = section.querySelector(
+        const normalTasksSection = Array.from(
+          document.querySelectorAll(
             ".collapse-widget-header__title-item_primary"
-          );
-          if (header && header.textContent.includes("Обычные задачи")) {
-            normalTasksSection = section;
-            break;
-          }
+          )
+        ).find(
+          (el) =>
+            el.textContent.includes("💨") &&
+            el.textContent.includes("Обычные задачи")
+        );
+
+        if (!normalTasksSection) {
+          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
         }
 
-        if (normalTasksSection) {
-          const table = normalTasksSection.querySelector("table");
-          if (table) {
-            const rows = table.querySelectorAll("tbody tr[data-key]");
-
-            rows.forEach((row) => {
-              const key = row.getAttribute("data-key");
-              if (key) {
-                const titleElement =
-                  row.querySelector(".edit-cell__text") ||
-                  row.querySelector('a[href*="/browse/"]') ||
-                  row.querySelector("td:first-child");
-                const title = titleElement
-                  ? titleElement.textContent.trim()
-                  : key;
-                normalTasks.push(key);
-                taskTitles[key] = title;
-              }
-            });
-          }
+        const widget = normalTasksSection.closest(".filter-widget");
+        if (!widget) {
+          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
         }
+
+        const taskTable = widget.querySelector("table.gt-table");
+        if (!taskTable) {
+          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
+        }
+
+        const taskRows = taskTable.querySelectorAll("tr[data-key]");
+        const tasks = [];
+        const taskTitles = {};
+
+        taskRows.forEach((row) => {
+          const key = row.getAttribute("data-key");
+          if (key && key.startsWith("PCR-")) {
+            const titleElement =
+              row.querySelector('.edit-cell__text, a[href*="/browse/"]') ||
+              row.querySelector("td:nth-child(2)");
+            const title = titleElement ? titleElement.textContent.trim() : key;
+
+            tasks.push(key);
+            taskTitles[key] = title;
+          }
+        });
 
         return {
-          normalTaskKeys: normalTasks,
+          normalTaskKeys: tasks,
           taskTitles: taskTitles,
-          taskCount: normalTasks.length,
+          taskCount: tasks.length,
         };
       });
 
@@ -248,17 +298,13 @@ class TaskManager {
           taskCount: result.normalTaskKeys.length,
           tasks: result.normalTaskKeys,
         },
-        "Найдены задачи в секции 'Обычные задачи'"
+        "Найдены задачи"
       );
 
-      return {
-        normalTasks: result.normalTaskKeys,
-        taskTitles: result.taskTitles,
-        taskCount: result.taskCount,
-      };
+      return result;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка получения задач");
-      return { normalTasks: [], taskTitles: {}, taskCount: 0 };
+      return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
     }
   }
 
@@ -319,12 +365,11 @@ class TaskManager {
       if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
         const { filteredTasks, filteredTitles } =
           await this.filterTasksBySprint(newTasks, taskTitles);
-
         const assignedTasks = [];
 
         for (const taskKey of filteredTasks) {
           if (this.tasksTaken < CONFIG.maxTasks) {
-            const assigned = await this.assignTask(
+            const assigned = await this.handleTaskAssignment(
               taskKey,
               filteredTitles[taskKey]
             );
@@ -361,7 +406,6 @@ class TaskManager {
           'input[name="password"]',
           ".passport-Domik",
           ".passport-AccountList",
-          'a[href*="passport.yandex-team.ru"]',
         ];
 
         return authSelectors.some(
@@ -396,13 +440,13 @@ class TaskManager {
         await sleep(240);
       }
 
-      const { normalTasks, taskTitles, taskCount } =
+      const { normalTaskKeys, taskTitles, taskCount } =
         await this.getNormalTasks();
       this.lastTaskCount = taskCount;
 
-      await this.processTasks(normalTasks, taskTitles, true);
+      await this.processTasks(normalTaskKeys, taskTitles, true);
 
-      let prevNormalTaskKeys = normalTasks;
+      let prevTasks = normalTaskKeys;
 
       await this.notifier.sendText(
         `🚀 Мониторинг начат\nАвтозабор: ${
@@ -423,7 +467,7 @@ class TaskManager {
           await sleep(5);
 
           const {
-            normalTasks: currentTasks,
+            normalTaskKeys: currentTasks,
             taskTitles: currentTitles,
             taskCount: currentCount,
           } = await this.getNormalTasks();
@@ -440,7 +484,7 @@ class TaskManager {
           }
 
           const newTasks = currentTasks.filter(
-            (task) => !prevNormalTaskKeys.includes(task)
+            (task) => !prevTasks.includes(task)
           );
 
           if (newTasks.length > 0) {
@@ -448,7 +492,7 @@ class TaskManager {
             await this.processTasks(newTasks, currentTitles, false);
           }
 
-          prevNormalTaskKeys = currentTasks;
+          prevTasks = currentTasks;
           errorCount = 0;
 
           await sleep(10);
@@ -469,10 +513,7 @@ class TaskManager {
         }
       }
     } catch (error) {
-      logger.error(
-        { error: error.message, stack: error.stack },
-        "Критическая ошибка мониторинга"
-      );
+      logger.error({ error: error.message }, "Критическая ошибка мониторинга");
       await this.notifier.sendText(
         `❌ Мониторинг остановлен: ${error.message}`
       );

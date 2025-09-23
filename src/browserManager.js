@@ -136,6 +136,22 @@ class BrowserManager {
     }
   }
 
+  async openNewTab() {
+    if (!this.browser) {
+      throw new Error("Браузер не инициализирован");
+    }
+
+    try {
+      const newPage = await this.browser.newPage();
+      await newPage.setUserAgent(CONFIG.userAgent);
+      await newPage.setViewport({ width: 1920, height: 1080 });
+      return newPage;
+    } catch (error) {
+      logger.error({ error: error.message }, "Ошибка открытия новой вкладки");
+      return null;
+    }
+  }
+
   async reloadPage() {
     if (!this.page) {
       throw new Error("Страница не инициализирована");
@@ -173,33 +189,9 @@ class BrowserManager {
       return true;
     } catch (error) {
       logger.error(
-        {
-          error: error.message,
-          url,
-          stack: error.stack,
-        },
+        { error: error.message, url, stack: error.stack },
         "Ошибка навигации"
       );
-
-      throw error;
-    }
-  }
-
-  async takeScreenshot(path, options = {}) {
-    if (!this.page) {
-      throw new Error("Страница не инициализирована");
-    }
-
-    try {
-      await this.page.screenshot({
-        path,
-        fullPage: true,
-        ...options,
-      });
-      logger.debug(`Скриншот сохранен: ${path}`);
-      return true;
-    } catch (error) {
-      logger.error({ error: error.message }, "Ошибка создания скриншота");
       throw error;
     }
   }
