@@ -10,11 +10,13 @@ class TaskManager {
     this.tasksTaken = 0;
     this.monitoringActive = false;
     this.lastTaskCount = 0;
+    this.processedSprints = new Set();
   }
 
   async startMonitoring() {
     this.monitoringActive = true;
     this.tasksTaken = 0;
+    this.processedSprints.clear();
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -115,8 +117,17 @@ class TaskManager {
     }
   }
 
-  async handleTaskAssignment(taskKey, taskTitle) {
+  async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
+      return false;
+    }
+
+    const sprintNumber = this.extractSprintNumber(taskTitle);
+    if (sprintNumber && this.processedSprints.has(sprintNumber)) {
+      logger.info(
+        { taskKey, sprintNumber },
+        "Задача из спринта уже обработана"
+      );
       return false;
     }
 
@@ -129,44 +140,9 @@ class TaskManager {
     try {
       logger.info({ taskKey, taskTitle }, "Обработка задачи");
 
-      const taskClicked = await mainPage.evaluate((taskKey) => {
-        const selectors = [
-          `tr[data-key="${taskKey}"]`,
-          `[data-key="${taskKey}"]`,
-          `a[href*="${taskKey}"]`,
-        ];
-
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (element) {
-            element.click();
-            return true;
-          }
-        }
-        return false;
-      }, taskKey);
-
-      if (!taskClicked) {
-        logger.warn({ taskKey }, "Не удалось кликнуть на задачу");
-        return false;
-      }
-
-      await sleep(3);
-
-      const taskUrl = await this.extractTaskUrlFromModal(mainPage);
-      if (!taskUrl) {
-        logger.warn(
-          { taskKey },
-          "Не найдена ссылка на задачу в модальном окне"
-        );
-        await this.closeModal(mainPage);
-        return false;
-      }
-
       const taskPage = await this.browserManager.openNewTab();
       if (!taskPage) {
         logger.error("Не удалось открыть новую вкладку");
-        await this.closeModal(mainPage);
         return false;
       }
 
@@ -181,6 +157,9 @@ class TaskManager {
 
         if (assigned) {
           this.tasksTaken++;
+          if (sprintNumber) {
+            this.processedSprints.add(sprintNumber);
+          }
           logger.info(
             { taskKey, tasksTaken: this.tasksTaken },
             "Задача взята в работу"
@@ -195,7 +174,6 @@ class TaskManager {
       } finally {
         await taskPage.close();
         await mainPage.bringToFront();
-        await this.closeModal(mainPage);
         await sleep(1);
       }
     } catch (error) {
@@ -203,9 +181,13 @@ class TaskManager {
         { error: error.message, taskKey },
         "Ошибка обработки задачи"
       );
-      await this.closeModal(mainPage);
       return false;
     }
+  }
+
+  extractSprintNumber(taskTitle) {
+    const match = taskTitle.match(/\[(\d+)\]/);
+    return match ? match[1] : null;
   }
 
   async closeModal(page) {
@@ -348,48 +330,98 @@ class TaskManager {
     newTasks.forEach((taskKey) => this.processedTasks.add(taskKey));
 
     try {
-      const tasksList = newTasks
-        .map((taskKey) => `• ${taskTitles[taskKey]}`)
-        .join("\n");
+      const mainPage = this.browserManager.getPage();
+      if (!mainPage) {
+        throw new Error("Основная страница не доступна");
+      }
 
-      await this.notifier.sendText(
-        `🚀 <b>${
-          isInitial
-            ? "Обнаружены задачи при запуске!"
-            : "Обнаружены новые задачи!"
-        }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-          CONFIG.maxTasks
-        }`
-      );
+      const tasksWithUrls = [];
 
-      if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-        const { filteredTasks, filteredTitles } =
-          await this.filterTasksBySprint(newTasks, taskTitles);
-        const assignedTasks = [];
+      for (const taskKey of newTasks) {
+        const taskTitle = taskTitles[taskKey];
 
-        for (const taskKey of filteredTasks) {
-          if (this.tasksTaken < CONFIG.maxTasks) {
-            const assigned = await this.handleTaskAssignment(
-              taskKey,
-              filteredTitles[taskKey]
-            );
-            if (assigned) {
-              assignedTasks.push(filteredTitles[taskKey]);
+        const taskClicked = await mainPage.evaluate((taskKey) => {
+          const selectors = [
+            `tr[data-key="${taskKey}"]`,
+            `[data-key="${taskKey}"]`,
+            `a[href*="${taskKey}"]`,
+          ];
+
+          for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+              element.click();
+              return true;
             }
-            await sleep(1);
           }
-        }
+          return false;
+        }, taskKey);
 
-        if (assignedTasks.length > 0) {
-          await this.notifier.sendText(
-            `✅ Удалось взять в работу ${
-              assignedTasks.length
-            } задач:\n${assignedTasks
-              .map((task) => `• ${task}`)
-              .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
-              CONFIG.maxTasks
-            }`
-          );
+        if (taskClicked) {
+          await sleep(3);
+          const taskUrl = await this.extractTaskUrlFromModal(mainPage);
+
+          if (taskUrl) {
+            tasksWithUrls.push({
+              key: taskKey,
+              title: taskTitle,
+              url: taskUrl,
+            });
+          }
+
+          await this.closeModal(mainPage);
+          await sleep(1);
+        }
+      }
+
+      if (tasksWithUrls.length > 0) {
+        const tasksList = tasksWithUrls
+          .map((task) => `• <a href="${task.url}">${task.title}</a>`)
+          .join("\n");
+
+        await this.notifier.sendText(
+          `🚀 <b>${
+            isInitial
+              ? "Обнаружены задачи при запуске!"
+              : "Обнаружены новые задачи!"
+          }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+            CONFIG.maxTasks
+          }`
+        );
+
+        if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
+          const { filteredTasks, filteredTitles } =
+            await this.filterTasksBySprint(newTasks, taskTitles);
+          const assignedTasks = [];
+
+          for (const task of tasksWithUrls) {
+            if (
+              this.tasksTaken < CONFIG.maxTasks &&
+              filteredTasks.includes(task.key)
+            ) {
+              const assigned = await this.handleTaskAssignment(
+                task.key,
+                task.title,
+                task.url
+              );
+              if (assigned) {
+                assignedTasks.push(task.title);
+              }
+              await sleep(1);
+            }
+          }
+
+          if (assignedTasks.length > 0) {
+            await this.notifier.sendText(
+              `✅ Удалось взять в работу ${
+                assignedTasks.length
+              } задач:\n${assignedTasks
+                .map((task) => `• ${task}`)
+                .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
+                CONFIG.maxTasks
+              }`
+            );
+          }
         }
       }
     } catch (error) {
@@ -406,15 +438,31 @@ class TaskManager {
           'input[name="password"]',
           ".passport-Domik",
           ".passport-AccountList",
+          'a[href*="passport.yandex-team.ru"]',
         ];
 
-        return authSelectors.some(
+        const hasAuthElements = authSelectors.some(
           (selector) => document.querySelector(selector) !== null
         );
+
+        const hasAuthText =
+          document.body.textContent.includes("Выберите аккаунт для входа") ||
+          document.body.textContent.includes("Войдите в аккаунт");
+
+        return hasAuthElements || hasAuthText;
       });
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
+        await this.notifier.sendText(
+          "⚠️ Требуется повторная авторизация в системе"
+        );
+        return false;
+      }
+
+      const currentUrl = await page.url();
+      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
+        logger.warn("Обнаружена страница авторизации по URL");
         await this.notifier.sendText(
           "⚠️ Требуется повторная авторизация в системе"
         );
@@ -435,9 +483,18 @@ class TaskManager {
     try {
       await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
 
-      if (CONFIG.authRequired) {
+      const isAuthenticated = await this.checkAuth();
+      if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
         await sleep(240);
+
+        const stillNotAuthenticated = await this.checkAuth();
+        if (stillNotAuthenticated) {
+          await this.notifier.sendText(
+            "❌ Мониторинг остановлен: требуется авторизация"
+          );
+          return;
+        }
       }
 
       const { normalTaskKeys, taskTitles, taskCount } =
