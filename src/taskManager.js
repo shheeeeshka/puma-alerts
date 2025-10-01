@@ -151,7 +151,7 @@ class TaskManager {
           waitUntil: "domcontentloaded",
           timeout: 15000,
         });
-        await sleep(2);
+        await sleep(0.6);
 
         const assigned = await this.takeTaskOnPraktikumPage(taskPage, taskUrl);
 
@@ -210,7 +210,7 @@ class TaskManager {
         }
         return false;
       });
-      await sleep(1);
+      await sleep(0.8);
     } catch (error) {
       logger.debug("Ошибка закрытия модального окна");
     }
@@ -224,7 +224,7 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
-      await sleep(3);
+      await sleep(0.8);
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -358,7 +358,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(3);
+          await sleep(2);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -486,7 +486,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(240);
+        await sleep(140);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -521,7 +521,7 @@ class TaskManager {
             break;
           }
 
-          await sleep(5);
+          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -552,7 +552,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(10);
+          await sleep(1);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -566,7 +566,7 @@ class TaskManager {
             );
           }
 
-          await sleep(15);
+          await sleep(10);
         }
       }
     } catch (error) {
