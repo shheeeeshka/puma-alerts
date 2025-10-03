@@ -6,7 +6,7 @@ export const CONFIG = {
   sprintWhitelist: process.env.SPRINT_WHITELIST
     ? process.env.SPRINT_WHITELIST.split(",").map((s) => s.trim())
     : [],
-  maxTasks: parseInt(process.env.MAX_TASKS) || 15,
+  maxTasks: parseInt(process.env.MAX_TASKS) || 4,
   targetUrl: process.env.TARGET_URL,
   targetBoardUrl: process.env.TARGET_BOARD_URL,
   userAgent:
