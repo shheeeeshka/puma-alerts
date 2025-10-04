@@ -10,7 +10,7 @@ const logger = pino({
       ignore: "pid,hostname",
     },
   },
-  encoding: "utf8",
+  encoding: "utf-8",
 });
 
 export default logger;

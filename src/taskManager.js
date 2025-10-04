@@ -86,6 +86,7 @@ class TaskManager {
       });
 
       if (buttonClicked) {
+        await sleep(0.8);
         logger.info("Задача успешно взята в работу");
         return true;
       }
@@ -102,10 +103,6 @@ class TaskManager {
 
   async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
-      logger.debug(
-        { taskKey, tasksTaken: this.tasksTaken, maxTasks: CONFIG.maxTasks },
-        "Пропуск задачи: автозабор выключен или достигнут лимит"
-      );
       return false;
     }
 
@@ -161,7 +158,6 @@ class TaskManager {
       } finally {
         await taskPage.close();
         await mainPage.bringToFront();
-        await sleep(1);
       }
     } catch (error) {
       logger.error(
@@ -306,11 +302,6 @@ class TaskManager {
   }
 
   async processTasks(tasks, taskTitles, isInitial = false) {
-    if (this.tasksTaken >= CONFIG.maxTasks) {
-      logger.debug("Достигнут лимит задач, пропуск обработки");
-      return;
-    }
-
     const newTasks = tasks.filter(
       (taskKey) => !this.processedTasks.has(taskKey)
     );
@@ -330,11 +321,6 @@ class TaskManager {
       const tasksWithUrls = [];
 
       for (const taskKey of newTasks) {
-        if (this.tasksTaken >= CONFIG.maxTasks) {
-          logger.debug("Достигнут лимит во время обработки задач");
-          break;
-        }
-
         const taskTitle = taskTitles[taskKey];
 
         const taskClicked = await mainPage.evaluate((taskKey) => {
@@ -355,7 +341,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          // await sleep(0.3);
+          await sleep(1.2);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -367,7 +353,7 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          // await sleep(0.3);
+          await sleep(0.5);
         }
       }
 
@@ -393,7 +379,7 @@ class TaskManager {
 
           for (const task of tasksWithUrls) {
             if (
-              this.tasksTaken <= CONFIG.maxTasks &&
+              this.tasksTaken < CONFIG.maxTasks &&
               filteredTasks.includes(task.key)
             ) {
               const assigned = await this.handleTaskAssignment(
@@ -453,14 +439,14 @@ class TaskManager {
 
         const hasAuthText =
           document.body.textContent.includes("Выберите аккаунт для входа") ||
-          document.body.textContent.includes("Войдите в аккаунт") ||
-          document.body.textContent.includes("Авторизация");
+          document.body.textContent.includes("Другой аккаунт") ||
+          document.body.textContent.includes("Войдите в аккаунт");
 
         return hasAuthElements || hasAuthText;
       });
 
       if (isAuthRequired) {
-        logger.warn("Обнаружена форма авторизации по элементам страницы");
+        logger.warn("Обнаружена форма авторизации");
         return false;
       }
 
@@ -486,12 +472,10 @@ class TaskManager {
           if (!isAuthenticated) {
             authRetryCount++;
 
-            logger.info(
-              "Ожидание авторизации, мониторинг перехода на основную страницу..."
-            );
+            logger.info("Ожидание авторизации...");
 
             await this.notifier.sendText(
-              "⚠️ Требуется авторизация в системе. Ожидание..."
+              "⚠️ Требуется авторизация в системе\nОжидание..."
             );
 
             const authWaitPromise = new Promise(async (resolve) => {
@@ -528,10 +512,10 @@ class TaskManager {
               setTimeout(() => {
                 if (!transitionDetected) {
                   clearInterval(checkInterval);
-                  logger.info("Таймаут ожидания авторизации (140 сек)");
+                  logger.info("Таймаут ожидания авторизации (50 сек)");
                   resolve(false);
                 }
-              }, 140000);
+              }, 50000);
             });
 
             const authSuccess = await authWaitPromise;
@@ -555,7 +539,7 @@ class TaskManager {
             logger.info(
               `Ожидание авторизации... (попытка ${authRetryCount}/${maxAuthRetries})`
             );
-            await sleep(30);
+            await sleep(50);
             continue;
           }
 
@@ -564,13 +548,10 @@ class TaskManager {
           if (this.tasksTaken >= CONFIG.maxTasks) {
             logger.info("Достигнут лимит задач, остановка мониторинга");
             await this.notifier.sendText(
-              `🎯 Достигнут лимит задач: ${this.tasksTaken}/${CONFIG.maxTasks}. Мониторинг остановлен.`
+              `🎯 Достигнут лимит задач на авто взятие: ${this.tasksTaken}/${CONFIG.maxTasks}. Автозабор остановлен.`
             );
-            await this.stopMonitoring();
             break;
           }
-
-          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -600,7 +581,7 @@ class TaskManager {
 
           errorCount = 0;
 
-          await sleep(1);
+          await sleep(0.6);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -614,7 +595,7 @@ class TaskManager {
             );
           }
 
-          await sleep(10);
+          await sleep(4);
         }
       }
     } catch (error) {
