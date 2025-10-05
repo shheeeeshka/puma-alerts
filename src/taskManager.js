@@ -86,9 +86,25 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(0.8);
-        logger.info("Задача успешно взята в работу");
-        return true;
+        await sleep(2);
+
+        const success = await taskPage.evaluate(() => {
+          const successIndicators = [
+            'button[class*="taken"]',
+            'button[class*="assigned"]',
+            ".status-success",
+            ".alert-success",
+          ];
+
+          return successIndicators.some((selector) =>
+            document.querySelector(selector)
+          );
+        });
+
+        if (success) {
+          logger.info("Задача успешно взята в работу");
+          return true;
+        }
       }
 
       return false;
@@ -158,6 +174,7 @@ class TaskManager {
       } finally {
         await taskPage.close();
         await mainPage.bringToFront();
+        await sleep(1);
       }
     } catch (error) {
       logger.error(
@@ -341,7 +358,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(1.2);
+          await sleep(2);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -353,7 +370,7 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          await sleep(0.5);
+          await sleep(1);
         }
       }
 
@@ -390,6 +407,7 @@ class TaskManager {
               if (assigned) {
                 assignedTasks.push(task.title);
               }
+              await sleep(1);
             }
           }
 
@@ -414,16 +432,6 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
-      const currentUrl = await page.url();
-
-      if (
-        currentUrl.includes("passport.yandex-team.ru") ||
-        currentUrl.includes("passport?mode=auth")
-      ) {
-        logger.warn("Обнаружена страница авторизации по URL");
-        return false;
-      }
-
       const isAuthRequired = await page.evaluate(() => {
         const authSelectors = [
           'input[type="password"]',
@@ -439,7 +447,6 @@ class TaskManager {
 
         const hasAuthText =
           document.body.textContent.includes("Выберите аккаунт для входа") ||
-          document.body.textContent.includes("Другой аккаунт") ||
           document.body.textContent.includes("Войдите в аккаунт");
 
         return hasAuthElements || hasAuthText;
@@ -447,6 +454,18 @@ class TaskManager {
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
+        await this.notifier.sendText(
+          "⚠️ Требуется повторная авторизация в системе"
+        );
+        return false;
+      }
+
+      const currentUrl = await page.url();
+      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
+        logger.warn("Обнаружена страница авторизации по URL");
+        await this.notifier.sendText(
+          "⚠️ Требуется повторная авторизация в системе"
+        );
         return false;
       }
 
@@ -460,98 +479,49 @@ class TaskManager {
   async trackTasks() {
     let errorCount = 0;
     const maxErrors = 10;
-    let authRetryCount = 0;
-    const maxAuthRetries = 3;
 
     try {
       await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
+
+      const isAuthenticated = await this.checkAuth();
+      if (!isAuthenticated) {
+        logger.info("Ожидание аутентификации...");
+        await sleep(140);
+
+        const stillNotAuthenticated = await this.checkAuth();
+        if (stillNotAuthenticated) {
+          await this.notifier.sendText(
+            "❌ Мониторинг остановлен: требуется авторизация"
+          );
+          return;
+        }
+      }
+
+      const { normalTaskKeys, taskTitles, taskCount } =
+        await this.getNormalTasks();
+      this.lastTaskCount = taskCount;
+
+      await this.processTasks(normalTaskKeys, taskTitles, true);
+
+      let prevTasks = normalTaskKeys;
+
+      await this.notifier.sendText(
+        `🚀 Мониторинг начат\nАвтозабор: ${
+          CONFIG.autoAssign ? "✅" : "❌"
+        }\nЛимит задач: ${CONFIG.maxTasks}\nЗадач в секции: ${taskCount}`
+      );
 
       while (this.monitoringActive) {
         try {
           const isAuthenticated = await this.checkAuth();
           if (!isAuthenticated) {
-            authRetryCount++;
-
-            logger.info("Ожидание авторизации...");
-
             await this.notifier.sendText(
-              "⚠️ Требуется авторизация в системе\nОжидание..."
-            );
-
-            const authWaitPromise = new Promise(async (resolve) => {
-              const page = this.browserManager.getPage();
-              let transitionDetected = false;
-
-              const checkInterval = setInterval(async () => {
-                if (!this.monitoringActive) {
-                  clearInterval(checkInterval);
-                  resolve(false);
-                  return;
-                }
-
-                try {
-                  const currentUrl = await page.url();
-                  if (
-                    !currentUrl.includes("passport.yandex-team.ru") &&
-                    !currentUrl.includes("auth")
-                  ) {
-                    logger.info(
-                      "Обнаружен переход с авторизации на основную страницу"
-                    );
-                    transitionDetected = true;
-                    clearInterval(checkInterval);
-                    resolve(true);
-                  }
-                } catch (error) {
-                  logger.debug(
-                    "Ошибка проверки URL при мониторинге авторизации"
-                  );
-                }
-              }, 2000);
-
-              setTimeout(() => {
-                if (!transitionDetected) {
-                  clearInterval(checkInterval);
-                  logger.info("Таймаут ожидания авторизации (50 сек)");
-                  resolve(false);
-                }
-              }, 50000);
-            });
-
-            const authSuccess = await authWaitPromise;
-
-            if (authSuccess) {
-              authRetryCount = 0;
-              logger.info("Авторизация прошла успешно, продолжаем мониторинг");
-              await this.notifier.sendText(
-                "✅ Авторизация прошла успешно! Мониторинг запущен."
-              );
-              continue;
-            }
-
-            if (authRetryCount >= maxAuthRetries) {
-              await this.notifier.sendText(
-                "❌ Мониторинг остановлен: требуется авторизация"
-              );
-              break;
-            }
-
-            logger.info(
-              `Ожидание авторизации... (попытка ${authRetryCount}/${maxAuthRetries})`
-            );
-            await sleep(50);
-            continue;
-          }
-
-          authRetryCount = 0;
-
-          if (this.tasksTaken >= CONFIG.maxTasks) {
-            logger.info("Достигнут лимит задач, остановка мониторинга");
-            await this.notifier.sendText(
-              `🎯 Достигнут лимит задач на авто взятие: ${this.tasksTaken}/${CONFIG.maxTasks}. Автозабор остановлен.`
+              "❌ Мониторинг остановлен: требуется авторизация"
             );
             break;
           }
+
+          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -571,7 +541,7 @@ class TaskManager {
           }
 
           const newTasks = currentTasks.filter(
-            (task) => !this.processedTasks.has(task)
+            (task) => !prevTasks.includes(task)
           );
 
           if (newTasks.length > 0) {
@@ -579,9 +549,10 @@ class TaskManager {
             await this.processTasks(newTasks, currentTitles, false);
           }
 
+          prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(0.6);
+          await sleep(1);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -595,7 +566,7 @@ class TaskManager {
             );
           }
 
-          await sleep(4);
+          await sleep(10);
         }
       }
     } catch (error) {
