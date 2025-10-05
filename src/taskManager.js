@@ -86,7 +86,7 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(2);
+        await sleep(0.7);
 
         const success = await taskPage.evaluate(() => {
           const successIndicators = [
@@ -358,7 +358,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(2);
+          await sleep(0.5);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -370,7 +370,7 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          await sleep(1);
+          await sleep(0.9);
         }
       }
 
@@ -407,7 +407,7 @@ class TaskManager {
               if (assigned) {
                 assignedTasks.push(task.title);
               }
-              await sleep(1);
+              await sleep(0.6);
             }
           }
 
@@ -521,7 +521,7 @@ class TaskManager {
             break;
           }
 
-          await sleep(1);
+          await sleep(0.5);
 
           const {
             normalTaskKeys: currentTasks,
@@ -552,7 +552,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(1);
+          await sleep(0.5);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -566,7 +566,7 @@ class TaskManager {
             );
           }
 
-          await sleep(10);
+          await sleep(5);
         }
       }
     } catch (error) {
