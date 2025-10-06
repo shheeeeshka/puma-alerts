@@ -60,10 +60,10 @@ class TaskManager {
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
+          ".prisma-button2",
           'button[class*="take"]',
           'button[class*="work"]',
           'button[class*="assign"]',
-          ".prisma-button2",
           'button[type="button"]',
         ];
 
@@ -86,7 +86,14 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(0.7);
+        await sleep(1);
+        logger.info("Задача успешно взята в работу");
+
+        const htmlContent = await taskPage.content();
+        const fs = await import("fs");
+        await fs.promises.writeFile("debug_task_page.html", htmlContent);
+
+        return true;
 
         const success = await taskPage.evaluate(() => {
           const successIndicators = [
@@ -151,7 +158,7 @@ class TaskManager {
           waitUntil: "domcontentloaded",
           timeout: 15000,
         });
-        await sleep(0.6);
+        await sleep(2);
 
         const assigned = await this.takeTaskOnPraktikumPage(taskPage, taskUrl);
 
@@ -210,7 +217,7 @@ class TaskManager {
         }
         return false;
       });
-      await sleep(0.8);
+      await sleep(1);
     } catch (error) {
       logger.debug("Ошибка закрытия модального окна");
     }
@@ -223,8 +230,8 @@ class TaskManager {
     }
 
     try {
-      await this.browserManager.reloadPage();
-      await sleep(0.8);
+      await this.browserManager.reloadPage({ waitUntil: "domcontentloaded" });
+      await sleep(1.4);
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -358,7 +365,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(0.5);
+          await sleep(1.3);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -370,7 +377,7 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          await sleep(0.9);
+          await sleep(1);
         }
       }
 
@@ -407,7 +414,7 @@ class TaskManager {
               if (assigned) {
                 assignedTasks.push(task.title);
               }
-              await sleep(0.6);
+              await sleep(1);
             }
           }
 
@@ -432,6 +439,13 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
+      const currentUrl = await page.url();
+      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
+        logger.warn("Обнаружена страница авторизации по URL");
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+        return false;
+      }
+
       const isAuthRequired = await page.evaluate(() => {
         const authSelectors = [
           'input[type="password"]',
@@ -447,6 +461,7 @@ class TaskManager {
 
         const hasAuthText =
           document.body.textContent.includes("Выберите аккаунт для входа") ||
+          document.body.textContent.includes("Другой аккаунт") ||
           document.body.textContent.includes("Войдите в аккаунт");
 
         return hasAuthElements || hasAuthText;
@@ -454,18 +469,7 @@ class TaskManager {
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
-        await this.notifier.sendText(
-          "⚠️ Требуется повторная авторизация в системе"
-        );
-        return false;
-      }
-
-      const currentUrl = await page.url();
-      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
-        logger.warn("Обнаружена страница авторизации по URL");
-        await this.notifier.sendText(
-          "⚠️ Требуется повторная авторизация в системе"
-        );
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
         return false;
       }
 
@@ -486,7 +490,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(140);
+        await sleep(160);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -521,7 +525,7 @@ class TaskManager {
             break;
           }
 
-          await sleep(0.5);
+          await sleep(5);
 
           const {
             normalTaskKeys: currentTasks,
@@ -552,7 +556,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(0.5);
+          await sleep(2);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -566,7 +570,7 @@ class TaskManager {
             );
           }
 
-          await sleep(5);
+          await sleep(8);
         }
       }
     } catch (error) {
