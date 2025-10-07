@@ -10,13 +10,11 @@ class TaskManager {
     this.tasksTaken = 0;
     this.monitoringActive = false;
     this.lastTaskCount = 0;
-    this.processedSprints = new Set();
   }
 
   async startMonitoring() {
     this.monitoringActive = true;
     this.tasksTaken = 0;
-    this.processedSprints.clear();
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -54,16 +52,16 @@ class TaskManager {
     }
   }
 
-  async takeTaskOnPraktikumPage(taskPage, taskUrl) {
+  async takeTaskOnPraktikumPage(taskPage) {
     try {
       await taskPage.bringToFront();
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
+          ".prisma-button2",
           'button[class*="take"]',
           'button[class*="work"]',
           'button[class*="assign"]',
-          ".prisma-button2",
           'button[type="button"]',
         ];
 
@@ -122,15 +120,6 @@ class TaskManager {
       return false;
     }
 
-    const sprintNumber = this.extractSprintNumber(taskTitle);
-    if (sprintNumber && this.processedSprints.has(sprintNumber)) {
-      logger.info(
-        { taskKey, sprintNumber },
-        "Задача из спринта уже обработана"
-      );
-      return false;
-    }
-
     const mainPage = this.browserManager.getPage();
     if (!mainPage) {
       logger.error("Основная страница не доступна");
@@ -151,15 +140,12 @@ class TaskManager {
           waitUntil: "domcontentloaded",
           timeout: 15000,
         });
-        await sleep(2);
+        await sleep(0.5);
 
-        const assigned = await this.takeTaskOnPraktikumPage(taskPage, taskUrl);
+        const assigned = await this.takeTaskOnPraktikumPage(taskPage);
 
         if (assigned) {
           this.tasksTaken++;
-          if (sprintNumber) {
-            this.processedSprints.add(sprintNumber);
-          }
           logger.info(
             { taskKey, tasksTaken: this.tasksTaken },
             "Задача взята в работу"
@@ -224,7 +210,7 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
-      await sleep(3);
+      await sleep(2);
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -358,7 +344,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(3);
+          await sleep(1.8);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -370,7 +356,7 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          await sleep(1);
+          await sleep(0.9);
         }
       }
 
@@ -432,6 +418,16 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
+      const currentUrl = await page.url();
+      if (
+        currentUrl.includes("passport.yandex-team.ru") ||
+        currentUrl.includes("passport?mode=auth")
+      ) {
+        logger.warn("Обнаружена страница авторизации по URL");
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+        return false;
+      }
+
       const isAuthRequired = await page.evaluate(() => {
         const authSelectors = [
           'input[type="password"]',
@@ -454,18 +450,7 @@ class TaskManager {
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
-        await this.notifier.sendText(
-          "⚠️ Требуется повторная авторизация в системе"
-        );
-        return false;
-      }
-
-      const currentUrl = await page.url();
-      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
-        logger.warn("Обнаружена страница авторизации по URL");
-        await this.notifier.sendText(
-          "⚠️ Требуется повторная авторизация в системе"
-        );
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
         return false;
       }
 
