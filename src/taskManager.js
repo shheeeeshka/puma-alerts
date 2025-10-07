@@ -60,10 +60,10 @@ class TaskManager {
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
-          ".prisma-button2",
           'button[class*="take"]',
           'button[class*="work"]',
           'button[class*="assign"]',
+          ".prisma-button2",
           'button[type="button"]',
         ];
 
@@ -86,14 +86,7 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(1);
-        logger.info("Задача успешно взята в работу");
-
-        const htmlContent = await taskPage.content();
-        const fs = await import("fs");
-        await fs.promises.writeFile("debug_task_page.html", htmlContent);
-
-        return true;
+        await sleep(2);
 
         const success = await taskPage.evaluate(() => {
           const successIndicators = [
@@ -230,8 +223,8 @@ class TaskManager {
     }
 
     try {
-      await this.browserManager.reloadPage({ waitUntil: "domcontentloaded" });
-      await sleep(1.4);
+      await this.browserManager.reloadPage();
+      await sleep(3);
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -365,7 +358,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(1.3);
+          await sleep(3);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -439,13 +432,6 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
-      const currentUrl = await page.url();
-      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
-        logger.warn("Обнаружена страница авторизации по URL");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-        return false;
-      }
-
       const isAuthRequired = await page.evaluate(() => {
         const authSelectors = [
           'input[type="password"]',
@@ -461,7 +447,6 @@ class TaskManager {
 
         const hasAuthText =
           document.body.textContent.includes("Выберите аккаунт для входа") ||
-          document.body.textContent.includes("Другой аккаунт") ||
           document.body.textContent.includes("Войдите в аккаунт");
 
         return hasAuthElements || hasAuthText;
@@ -469,7 +454,18 @@ class TaskManager {
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+        await this.notifier.sendText(
+          "⚠️ Требуется повторная авторизация в системе"
+        );
+        return false;
+      }
+
+      const currentUrl = await page.url();
+      if (currentUrl.includes("passport.yandex-team.ru/passport?mode=auth")) {
+        logger.warn("Обнаружена страница авторизации по URL");
+        await this.notifier.sendText(
+          "⚠️ Требуется повторная авторизация в системе"
+        );
         return false;
       }
 
@@ -490,7 +486,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(160);
+        await sleep(240);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -556,7 +552,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(2);
+          await sleep(10);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -570,7 +566,7 @@ class TaskManager {
             );
           }
 
-          await sleep(8);
+          await sleep(15);
         }
       }
     } catch (error) {
