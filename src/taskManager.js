@@ -420,7 +420,7 @@ class TaskManager {
       const isLoggedIn = await page.evaluate(() => {
         return (
           !document.querySelector('input[type="password"]') &&
-          !document.body.textContent.includes("Выберите аккаунт для входа")
+          !document.body.textContent.includes("Другой аккаунт")
         );
       });
 
@@ -441,6 +441,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
         await sleep(240);
 
         const stillNotAuthenticated = await this.checkAuth();
@@ -476,7 +477,7 @@ class TaskManager {
             break;
           }
 
-          await sleep(5);
+          await sleep(3);
 
           const {
             normalTaskKeys: currentTasks,
