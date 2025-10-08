@@ -138,9 +138,8 @@ class TaskManager {
       try {
         await taskPage.goto(taskUrl, {
           waitUntil: "domcontentloaded",
-          timeout: 15000,
+          timeout: 6000,
         });
-        await sleep(0.5);
 
         const assigned = await this.takeTaskOnPraktikumPage(taskPage);
 
@@ -418,43 +417,14 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
-      const currentUrl = await page.url();
-      if (
-        currentUrl.includes("passport.yandex-team.ru") ||
-        currentUrl.includes("passport?mode=auth")
-      ) {
-        logger.warn("Обнаружена страница авторизации по URL");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-        return false;
-      }
-
-      const isAuthRequired = await page.evaluate(() => {
-        const authSelectors = [
-          'input[type="password"]',
-          'input[name="password"]',
-          ".passport-Domik",
-          ".passport-AccountList",
-          'a[href*="passport.yandex-team.ru"]',
-        ];
-
-        const hasAuthElements = authSelectors.some(
-          (selector) => document.querySelector(selector) !== null
+      const isLoggedIn = await page.evaluate(() => {
+        return (
+          !document.querySelector('input[type="password"]') &&
+          !document.body.textContent.includes("Выберите аккаунт для входа")
         );
-
-        const hasAuthText =
-          document.body.textContent.includes("Выберите аккаунт для входа") ||
-          document.body.textContent.includes("Войдите в аккаунт");
-
-        return hasAuthElements || hasAuthText;
       });
 
-      if (isAuthRequired) {
-        logger.warn("Обнаружена форма авторизации");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-        return false;
-      }
-
-      return true;
+      return isLoggedIn;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка проверки авторизации");
       return false;
