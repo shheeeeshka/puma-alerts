@@ -417,14 +417,43 @@ class TaskManager {
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
-      const isLoggedIn = await page.evaluate(() => {
-        return (
-          !document.querySelector('input[type="password"]') &&
-          !document.body.textContent.includes("Другой аккаунт")
+      const currentUrl = await page.url();
+      if (
+        currentUrl.includes("passport.yandex-team.ru") ||
+        currentUrl.includes("passport?mode=auth")
+      ) {
+        logger.warn("Обнаружена страница авторизации по URL");
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+        return false;
+      }
+
+      const isAuthRequired = await page.evaluate(() => {
+        const authSelectors = [
+          'input[type="password"]',
+          'input[name="password"]',
+          ".passport-Domik",
+          ".passport-AccountList",
+          'a[href*="passport.yandex-team.ru"]',
+        ];
+
+        const hasAuthElements = authSelectors.some(
+          (selector) => document.querySelector(selector) !== null
         );
+
+        const hasAuthText =
+          document.body.textContent.includes("Выберите аккаунт для входа") ||
+          document.body.textContent.includes("Войдите в аккаунт");
+
+        return hasAuthElements || hasAuthText;
       });
 
-      return isLoggedIn;
+      if (isAuthRequired) {
+        logger.warn("Обнаружена форма авторизации");
+        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+        return false;
+      }
+
+      return true;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка проверки авторизации");
       return false;
