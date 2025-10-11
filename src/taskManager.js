@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { sleep, checkSprintWhitelist } from "./utils.js";
 import CONFIG from "./config.js";
 import logger from "./logger.js";
@@ -138,7 +140,7 @@ class TaskManager {
       try {
         await taskPage.goto(taskUrl, {
           waitUntil: "domcontentloaded",
-          timeout: 6000,
+          timeout: 8000,
         });
 
         const assigned = await this.takeTaskOnPraktikumPage(taskPage);
@@ -312,51 +314,155 @@ class TaskManager {
       return;
     }
 
-    newTasks.forEach((taskKey) => this.processedTasks.add(taskKey));
+    logger.info(
+      { newTasksCount: newTasks.length, newTasks },
+      "Начало обработки новых задач"
+    );
 
     try {
       const mainPage = this.browserManager.getPage();
       if (!mainPage) {
-        throw new Error("Основная страница не доступна");
+        throw new Error("Основная страница не инициализирована");
       }
 
       const tasksWithUrls = [];
 
       for (const taskKey of newTasks) {
         const taskTitle = taskTitles[taskKey];
+        let taskUrl = null;
+        let attempts = 0;
+        const maxAttempts = 3;
 
-        const taskClicked = await mainPage.evaluate((taskKey) => {
-          const selectors = [
-            `tr[data-key="${taskKey}"]`,
-            `[data-key="${taskKey}"]`,
-            `a[href*="${taskKey}"]`,
-          ];
+        while (attempts < maxAttempts && !taskUrl) {
+          attempts++;
+          try {
+            logger.debug(
+              { taskKey, attempt: attempts },
+              "Попытка получить URL задачи"
+            );
 
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-              element.click();
-              return true;
+            const screenshotDir = path.join(process.cwd(), "debug_screenshots");
+            if (!fs.existsSync(screenshotDir)) {
+              fs.mkdirSync(screenshotDir, { recursive: true });
             }
-          }
-          return false;
-        }, taskKey);
 
-        if (taskClicked) {
-          await sleep(1.8);
-          const taskUrl = await this.extractTaskUrlFromModal(mainPage);
+            const taskClicked = await mainPage.evaluate((taskKey) => {
+              const selectors = [
+                `tr[data-key="${taskKey}"]`,
+                `[data-key="${taskKey}"] .edit-cell__text`,
+                `a[href*="${taskKey}"]`,
+                `[data-key="${taskKey}"] td:first-child`,
+              ];
 
-          if (taskUrl) {
-            tasksWithUrls.push({
-              key: taskKey,
-              title: taskTitle,
-              url: taskUrl,
+              for (const selector of selectors) {
+                const element = document.querySelector(selector);
+                if (element) {
+                  element.click();
+                  return true;
+                }
+              }
+              return false;
+            }, taskKey);
+
+            if (!taskClicked) {
+              logger.warn({ taskKey }, "Не удалось кликнуть на задачу");
+
+              await mainPage.screenshot({
+                path: path.join(
+                  screenshotDir,
+                  `click_failed_${taskKey}_attempt_${attempts}.png`
+                ),
+                fullPage: true,
+              });
+              continue;
+            }
+
+            await sleep(2 + attempts);
+
+            taskUrl = await this.extractTaskUrlFromModal(mainPage);
+
+            if (!taskUrl) {
+              logger.warn(
+                { taskKey, attempt: attempts },
+                "URL не найден, повторная попытка"
+              );
+
+              await mainPage.screenshot({
+                path: path.join(
+                  screenshotDir,
+                  `modal_not_found_${taskKey}_attempt_${attempts}.png`
+                ),
+                fullPage: true,
+              });
+
+              const modalContent = await mainPage.evaluate(() => {
+                const modal = document.querySelector(
+                  '.modal-content, [class*="modal"], .g-modal'
+                );
+                return modal ? modal.innerHTML : "Модальное окно не найдено";
+              });
+
+              logger.debug(
+                { taskKey, modalContent: modalContent.substring(0, 500) },
+                "Содержимое модального окна"
+              );
+
+              await this.closeModal(mainPage);
+              await sleep(1);
+            }
+          } catch (error) {
+            logger.error(
+              { taskKey, error: error.message },
+              "Ошибка при обработке задачи"
+            );
+
+            const screenshotDir = path.join(process.cwd(), "debug_screenshots");
+            await mainPage.screenshot({
+              path: path.join(
+                screenshotDir,
+                `error_${taskKey}_attempt_${attempts}.png`
+              ),
+              fullPage: true,
             });
-          }
 
-          await this.closeModal(mainPage);
-          await sleep(0.9);
+            await this.closeModal(mainPage);
+          }
         }
+
+        if (taskUrl) {
+          tasksWithUrls.push({
+            key: taskKey,
+            title: taskTitle,
+            url: taskUrl,
+          });
+          logger.info({ taskKey, taskUrl }, "URL задачи успешно получен");
+
+          await mainPage.screenshot({
+            path: path.join(
+              process.cwd(),
+              "debug_screenshots",
+              `success_${taskKey}.png`
+            ),
+            fullPage: true,
+          });
+        } else {
+          logger.error(
+            { taskKey },
+            "Не удалось получить URL задачи после всех попыток"
+          );
+
+          await mainPage.screenshot({
+            path: path.join(
+              process.cwd(),
+              "debug_screenshots",
+              `failed_${taskKey}.png`
+            ),
+            fullPage: true,
+          });
+        }
+
+        await this.closeModal(mainPage);
+        await sleep(1.5);
       }
 
       if (tasksWithUrls.length > 0) {
@@ -409,8 +515,22 @@ class TaskManager {
           }
         }
       }
+
+      newTasks.forEach((taskKey) => this.processedTasks.add(taskKey));
     } catch (error) {
-      logger.error({ error: error.message }, "Ошибка обработки задач");
+      logger.error(
+        { error: error.message },
+        "Критическая ошибка обработки задач"
+      );
+
+      const mainPage = this.browserManager.getPage();
+      if (mainPage) {
+        const screenshotDir = path.join(process.cwd(), "debug_screenshots");
+        await mainPage.screenshot({
+          path: path.join(screenshotDir, `critical_error_${Date.now()}.png`),
+          fullPage: true,
+        });
+      }
     }
   }
 
