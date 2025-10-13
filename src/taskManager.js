@@ -160,10 +160,6 @@ class TaskManager {
             { taskKey, tasksTaken: this.tasksTaken },
             "Задача взята в работу"
           );
-
-          await this.notifier.sendText(
-            `✅ Задача взята в работу\n"${taskTitle}"\n📊 Взято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`
-          );
         }
 
         return assigned;
@@ -415,6 +411,10 @@ class TaskManager {
                 CONFIG.maxTasks
               }`
             );
+
+            await this.browserManager.close();
+            await this.browserManager.init();
+            await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
           }
         }
       }
