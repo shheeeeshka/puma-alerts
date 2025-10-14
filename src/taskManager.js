@@ -411,10 +411,6 @@ class TaskManager {
                 CONFIG.maxTasks
               }`
             );
-
-            await this.browserManager.close();
-            await this.browserManager.init();
-            await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
           }
         }
       }
@@ -515,7 +511,7 @@ class TaskManager {
             break;
           }
 
-          await sleep(3);
+          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -546,7 +542,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(10);
+          await sleep(1.8);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
