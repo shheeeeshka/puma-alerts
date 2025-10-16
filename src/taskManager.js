@@ -6,7 +6,6 @@ class TaskManager {
   constructor(browserManager, notifier) {
     this.browserManager = browserManager;
     this.notifier = notifier;
-    this.processedTasks = new Set();
     this.tasksTaken = 0;
     this.monitoringActive = false;
     this.lastTaskCount = 0;
@@ -310,11 +309,7 @@ class TaskManager {
     return { filteredTasks, filteredTitles };
   }
 
-  async processTasks(tasks, taskTitles, isInitial = false) {
-    const newTasks = tasks.filter(
-      (taskKey) => !this.processedTasks.has(taskKey)
-    );
-    
+  async processTasks(newTasks, taskTitles, isInitial = false) {
     if (newTasks.length === 0) {
       return;
     }
@@ -379,15 +374,17 @@ class TaskManager {
         );
 
         if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-          const { filteredTasks, filteredTitles } =
-            await this.filterTasksBySprint(newTasks, taskTitles);
           const assignedTasks = [];
 
           for (const task of tasksWithUrls) {
-            if (
-              this.tasksTaken < CONFIG.maxTasks &&
-              filteredTasks.includes(task.key)
-            ) {
+            if (this.tasksTaken >= CONFIG.maxTasks) break;
+
+            const shouldProcess = checkSprintWhitelist(
+              task.title,
+              CONFIG.sprintWhitelist
+            );
+
+            if (shouldProcess) {
               const assigned = await this.handleTaskAssignment(
                 task.key,
                 task.title,
