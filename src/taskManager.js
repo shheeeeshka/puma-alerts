@@ -1,20 +1,53 @@
 import { sleep, checkSprintWhitelist } from "./utils.js";
 import CONFIG from "./config.js";
 import logger from "./logger.js";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class TaskManager {
   constructor(browserManager, notifier) {
     this.browserManager = browserManager;
     this.notifier = notifier;
-    this.processedTasks = new Set();
     this.tasksTaken = 0;
     this.monitoringActive = false;
     this.lastTaskCount = 0;
+    this.authNotificationSent = false;
+    this.screenshotsDir = path.join(__dirname, "screenshots");
+  }
+
+  async ensureScreenshotsDir() {
+    if (!fs.existsSync(this.screenshotsDir)) {
+      fs.mkdirSync(this.screenshotsDir, { recursive: true });
+    }
+  }
+
+  async takeScreenshot(page, name) {
+    try {
+      await this.ensureScreenshotsDir();
+      const screenshotPath = path.join(
+        this.screenshotsDir,
+        `${name}_${Date.now()}.png`
+      );
+      await page.screenshot({
+        path: screenshotPath,
+        fullPage: false,
+        type: "png",
+      });
+      return screenshotPath;
+    } catch (error) {
+      logger.debug("Не удалось сделать скриншот");
+      return null;
+    }
   }
 
   async startMonitoring() {
     this.monitoringActive = true;
     this.tasksTaken = 0;
+    this.authNotificationSent = false;
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -27,11 +60,6 @@ class TaskManager {
   async extractTaskUrlFromModal(page) {
     try {
       const url = await page.evaluate(() => {
-        // const greenBorderElement = document.querySelector(
-        //   '.yfm__wacko[style*="border:2px solid green"]'
-        // );
-        // if (!greenBorderElement) return null;
-
         const linkElement = document.querySelector(
           'a[href*="praktikum-admin.yandex-team.ru"]'
         );
@@ -53,6 +81,8 @@ class TaskManager {
   }
 
   async takeTaskOnPraktikumPage(taskPage) {
+    let screenshotPath = null;
+
     try {
       await taskPage.bringToFront();
 
@@ -84,18 +114,26 @@ class TaskManager {
       });
 
       if (buttonClicked) {
+        screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
+
+        await sleep(2);
+
         try {
-          await taskPage.screenshot({
-            path: `debug_screenshots/task_clicked_${Date.now()}.png`,
-            fullPage: false,
-          });
-          logger.debug("Скриншот после клика сохранен");
-        } catch (screenshotError) {
-          logger.debug("Не удалось сделать скриншот");
+          await this.ensureScreenshotsDir();
+          const htmlContent = await taskPage.content();
+          const htmlPath = path.join(
+            this.screenshotsDir,
+            `debug_html_${Date.now()}.html`
+          );
+          fs.writeFileSync(htmlPath, htmlContent);
+          logger.debug(`HTML сохранен: ${htmlPath}`);
+        } catch (htmlError) {
+          logger.debug("Не удалось сохранить HTML");
         }
 
-        return true;
-        await sleep(2);
+        await sleep(1);
+
+        return true; // for debug only
 
         const success = await taskPage.evaluate(() => {
           const successIndicators = [
@@ -103,6 +141,7 @@ class TaskManager {
             'button[class*="assigned"]',
             ".status-success",
             ".alert-success",
+            ".prisma-button2[disabled]",
           ];
 
           return successIndicators.some((selector) =>
@@ -112,17 +151,17 @@ class TaskManager {
 
         if (success) {
           logger.info("Задача успешно взята в работу");
-          return true;
+          return { success: true, screenshotPath };
         }
       }
 
-      return false;
+      return { success: false, screenshotPath };
     } catch (error) {
       logger.error(
         { error: error.message },
         "Ошибка взятия задачи на странице практикума"
       );
-      return false;
+      return { success: false, screenshotPath };
     }
   }
 
@@ -149,24 +188,35 @@ class TaskManager {
       try {
         await taskPage.goto(taskUrl, {
           waitUntil: "domcontentloaded",
-          timeout: 8000,
+          timeout: 10000,
         });
 
-        const assigned = await this.takeTaskOnPraktikumPage(taskPage);
+        const { success, screenshotPath } = await this.takeTaskOnPraktikumPage(
+          taskPage
+        );
 
-        if (assigned) {
+        if (success) {
           this.tasksTaken++;
           logger.info(
             { taskKey, tasksTaken: this.tasksTaken },
             "Задача взята в работу"
           );
+
+          if (screenshotPath) {
+            await this.notifier.sendAlert({
+              imagePath: screenshotPath,
+              link: taskUrl,
+              caption: `✅ Задача взята в работу\n\n${taskTitle}\n\nВзято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`,
+              showBoardButton: true,
+            });
+          }
         }
 
-        return assigned;
+        return success;
       } finally {
         await taskPage.close();
         await mainPage.bringToFront();
-        await sleep(1);
+        await sleep(0.5);
       }
     } catch (error) {
       logger.error(
@@ -202,7 +252,7 @@ class TaskManager {
         }
         return false;
       });
-      await sleep(1);
+      await sleep(0.5);
     } catch (error) {
       logger.debug("Ошибка закрытия модального окна");
     }
@@ -216,7 +266,7 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
-      await sleep(2);
+      await sleep(1);
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -310,16 +360,10 @@ class TaskManager {
     return { filteredTasks, filteredTitles };
   }
 
-  async processTasks(tasks, taskTitles, isInitial = false) {
-    const newTasks = tasks.filter(
-      (taskKey) => !this.processedTasks.has(taskKey)
-    );
-
-    if (newTasks.length === 0) {
+  async processTasks(newTasks, taskTitles, isInitial = false) {
+    if (newTasks?.length === 0) {
       return;
     }
-
-    newTasks.forEach((taskKey) => this.processedTasks.add(taskKey));
 
     try {
       const mainPage = this.browserManager.getPage();
@@ -350,7 +394,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(1.8);
+          await sleep(1);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -428,7 +472,12 @@ class TaskManager {
         currentUrl.includes("passport?mode=auth")
       ) {
         logger.warn("Обнаружена страница авторизации по URL");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+
+        if (!this.authNotificationSent) {
+          await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+          this.authNotificationSent = true;
+        }
+
         return false;
       }
 
@@ -454,10 +503,16 @@ class TaskManager {
 
       if (isAuthRequired) {
         logger.warn("Обнаружена форма авторизации");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+
+        if (!this.authNotificationSent) {
+          await this.notifier.sendText("⚠️ Требуется авторизация в системе");
+          this.authNotificationSent = true;
+        }
+
         return false;
       }
 
+      this.authNotificationSent = false;
       return true;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка проверки авторизации");
@@ -475,8 +530,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-        await sleep(240);
+        await sleep(120);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -542,7 +596,7 @@ class TaskManager {
           prevTasks = currentTasks;
           errorCount = 0;
 
-          await sleep(1.8);
+          await sleep(1.5);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -556,7 +610,7 @@ class TaskManager {
             );
           }
 
-          await sleep(15);
+          await sleep(10);
         }
       }
     } catch (error) {
