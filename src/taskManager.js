@@ -114,9 +114,9 @@ class TaskManager {
       });
 
       if (buttonClicked) {
+        await sleep(1);
         screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
-
-        await sleep(2);
+        await sleep(1);
 
         try {
           await this.ensureScreenshotsDir();
@@ -133,20 +133,20 @@ class TaskManager {
 
         await sleep(1);
 
-        return true; // for debug only
-
         const success = await taskPage.evaluate(() => {
-          const successIndicators = [
-            'button[class*="taken"]',
-            'button[class*="assigned"]',
-            ".status-success",
-            ".alert-success",
-            ".prisma-button2[disabled]",
-          ];
+          const slaTimerRegex =
+            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
 
-          return successIndicators.some((selector) =>
-            document.querySelector(selector)
-          );
+          const pageText = document.body.textContent || document.body.innerText;
+
+          const match = pageText.match(slaTimerRegex);
+
+          if (match) {
+            const timerText = match[0];
+            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
+          }
+
+          return false;
         });
 
         if (success) {
@@ -360,8 +360,8 @@ class TaskManager {
     return { filteredTasks, filteredTitles };
   }
 
-  async processTasks(newTasks, taskTitles, isInitial = false) {
-    if (newTasks?.length === 0) {
+  async processTasks(newTasks = [], taskTitles = [], isInitial = false) {
+    if (newTasks.length === 0) {
       return;
     }
 
@@ -530,7 +530,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(120);
+        await sleep(60);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -539,6 +539,8 @@ class TaskManager {
           );
           return;
         }
+        await this.browserManager.reloadPage();
+        await sleep(2);
       }
 
       const { normalTaskKeys, taskTitles, taskCount } =
@@ -564,8 +566,6 @@ class TaskManager {
             );
             break;
           }
-
-          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -595,8 +595,6 @@ class TaskManager {
 
           prevTasks = currentTasks;
           errorCount = 0;
-
-          await sleep(1.5);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
@@ -610,7 +608,7 @@ class TaskManager {
             );
           }
 
-          await sleep(10);
+          await sleep(5);
         }
       }
     } catch (error) {
