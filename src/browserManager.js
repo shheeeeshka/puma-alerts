@@ -1,6 +1,6 @@
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer";
-import { isRunningOnHosting, getChromePath, sleep } from "./utils.js";
+import { isRunningOnHosting, getChromePath } from "./utils.js";
 import CONFIG from "./config.js";
 import logger from "./logger.js";
 import os from "os";
@@ -160,7 +160,7 @@ class BrowserManager {
     try {
       logger.debug("Перезагрузка страницы");
       await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-      await sleep(2000);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       return true;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка перезагрузки страницы");
