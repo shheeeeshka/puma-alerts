@@ -160,7 +160,7 @@ class BrowserManager {
     try {
       logger.debug("Перезагрузка страницы");
       await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
-      await sleep(1000);
+      await sleep(2000);
       return true;
     } catch (error) {
       logger.error({ error: error.message }, "Ошибка перезагрузки страницы");
