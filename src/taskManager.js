@@ -595,6 +595,8 @@ class TaskManager {
 
           prevTasks = currentTasks;
           errorCount = 0;
+          
+          await sleep(1.5);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
           errorCount++;
