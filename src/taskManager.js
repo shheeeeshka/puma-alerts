@@ -114,25 +114,39 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(2);
         screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
 
         await sleep(2);
 
+        try {
+          await this.ensureScreenshotsDir();
+          const htmlContent = await taskPage.content();
+          const htmlPath = path.join(
+            this.screenshotsDir,
+            `debug_html_${Date.now()}.html`
+          );
+          fs.writeFileSync(htmlPath, htmlContent);
+          logger.debug(`HTML сохранен: ${htmlPath}`);
+        } catch (htmlError) {
+          logger.debug("Не удалось сохранить HTML");
+        }
+
+        await sleep(1);
+
+        return true; // for debug only
+
         const success = await taskPage.evaluate(() => {
-          const slaTimerRegex =
-            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
+          const successIndicators = [
+            'button[class*="taken"]',
+            'button[class*="assigned"]',
+            ".status-success",
+            ".alert-success",
+            ".prisma-button2[disabled]",
+          ];
 
-          const pageText = document.body.textContent || document.body.innerText;
-
-          const match = pageText.match(slaTimerRegex);
-
-          if (match) {
-            const timerText = match[0];
-            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
-          }
-
-          return false;
+          return successIndicators.some((selector) =>
+            document.querySelector(selector)
+          );
         });
 
         if (success) {
