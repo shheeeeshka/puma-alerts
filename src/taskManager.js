@@ -17,11 +17,35 @@ class TaskManager {
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
     this.screenshotsDir = path.join(__dirname, "screenshots");
+    this.htmlDebugDir = path.join(__dirname, "html_debug");
   }
 
   async ensureScreenshotsDir() {
     if (!fs.existsSync(this.screenshotsDir)) {
       fs.mkdirSync(this.screenshotsDir, { recursive: true });
+    }
+  }
+
+  async ensureHtmlDebugDir() {
+    if (!fs.existsSync(this.htmlDebugDir)) {
+      fs.mkdirSync(this.htmlDebugDir, { recursive: true });
+    }
+  }
+
+  async saveHtmlDebug(page, name) {
+    try {
+      await this.ensureHtmlDebugDir();
+      const htmlContent = await page.content();
+      const htmlPath = path.join(
+        this.htmlDebugDir,
+        `${name}_${Date.now()}.html`
+      );
+      fs.writeFileSync(htmlPath, htmlContent);
+      logger.debug(`HTML сохранен: ${htmlPath}`);
+      return htmlPath;
+    } catch (error) {
+      logger.debug("Не удалось сохранить HTML");
+      return null;
     }
   }
 
@@ -82,9 +106,14 @@ class TaskManager {
 
   async takeTaskOnPraktikumPage(taskPage) {
     let screenshotPath = null;
+    let htmlBeforePath = null;
+    let htmlAfterPath = null;
 
     try {
       await taskPage.bringToFront();
+
+      htmlBeforePath = await this.saveHtmlDebug(taskPage, "before_click");
+      screenshotPath = await this.takeScreenshot(taskPage, "page_before_click");
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
@@ -115,21 +144,13 @@ class TaskManager {
 
       if (buttonClicked) {
         await sleep(1);
-        screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
-        await sleep(1);
 
-        try {
-          await this.ensureScreenshotsDir();
-          const htmlContent = await taskPage.content();
-          const htmlPath = path.join(
-            this.screenshotsDir,
-            `debug_html_${Date.now()}.html`
-          );
-          fs.writeFileSync(htmlPath, htmlContent);
-          logger.debug(`HTML сохранен: ${htmlPath}`);
-        } catch (htmlError) {
-          logger.debug("Не удалось сохранить HTML");
-        }
+        const afterClickScreenshot = await this.takeScreenshot(
+          taskPage,
+          "after_button_click"
+        );
+
+        htmlAfterPath = await this.saveHtmlDebug(taskPage, "after_click");
 
         await sleep(1);
 
@@ -151,17 +172,54 @@ class TaskManager {
 
         if (success) {
           logger.info("Задача успешно взята в работу");
-          return { success: true, screenshotPath };
+          return {
+            success: true,
+            screenshotPath: afterClickScreenshot,
+            debugInfo: {
+              htmlBefore: htmlBeforePath,
+              htmlAfter: htmlAfterPath,
+              screenshotBefore: screenshotPath,
+            },
+          };
         }
+      } else {
+        logger.warn("Кнопка взятия задачи не найдена или не нажата");
+        const noButtonScreenshot = await this.takeScreenshot(
+          taskPage,
+          "no_button_found"
+        );
+
+        await this.saveHtmlDebug(taskPage, "no_button_found");
       }
 
-      return { success: false, screenshotPath };
+      return {
+        success: false,
+        screenshotPath,
+        debugInfo: {
+          htmlBefore: htmlBeforePath,
+          htmlAfter: htmlAfterPath,
+          screenshotBefore: screenshotPath,
+        },
+      };
     } catch (error) {
       logger.error(
         { error: error.message },
         "Ошибка взятия задачи на странице практикума"
       );
-      return { success: false, screenshotPath };
+
+      const errorHtmlPath = await this.saveHtmlDebug(taskPage, "error");
+      const errorScreenshotPath = await this.takeScreenshot(taskPage, "error");
+
+      return {
+        success: false,
+        screenshotPath: errorScreenshotPath,
+        debugInfo: {
+          htmlBefore: htmlBeforePath,
+          htmlAfter: htmlAfterPath,
+          htmlError: errorHtmlPath,
+          error: error.message,
+        },
+      };
     }
   }
 
