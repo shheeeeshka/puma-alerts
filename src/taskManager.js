@@ -114,24 +114,10 @@ class TaskManager {
       });
 
       if (buttonClicked) {
-        await sleep(1);
+        await sleep(2);
         screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
-        await sleep(1);
 
-        try {
-          await this.ensureScreenshotsDir();
-          const htmlContent = await taskPage.content();
-          const htmlPath = path.join(
-            this.screenshotsDir,
-            `debug_html_${Date.now()}.html`
-          );
-          fs.writeFileSync(htmlPath, htmlContent);
-          logger.debug(`HTML сохранен: ${htmlPath}`);
-        } catch (htmlError) {
-          logger.debug("Не удалось сохранить HTML");
-        }
-
-        await sleep(1);
+        await sleep(2);
 
         const success = await taskPage.evaluate(() => {
           const slaTimerRegex =
@@ -360,8 +346,8 @@ class TaskManager {
     return { filteredTasks, filteredTitles };
   }
 
-  async processTasks(newTasks = [], taskTitles = [], isInitial = false) {
-    if (newTasks.length === 0) {
+  async processTasks(newTasks, taskTitles, isInitial = false) {
+    if (newTasks?.length === 0) {
       return;
     }
 
@@ -530,7 +516,7 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(60);
+        await sleep(120);
 
         const stillNotAuthenticated = await this.checkAuth();
         if (stillNotAuthenticated) {
@@ -539,8 +525,6 @@ class TaskManager {
           );
           return;
         }
-        await this.browserManager.reloadPage();
-        await sleep(2);
       }
 
       const { normalTaskKeys, taskTitles, taskCount } =
@@ -566,6 +550,8 @@ class TaskManager {
             );
             break;
           }
+
+          await sleep(1);
 
           const {
             normalTaskKeys: currentTasks,
@@ -595,7 +581,7 @@ class TaskManager {
 
           prevTasks = currentTasks;
           errorCount = 0;
-          
+
           await sleep(1.5);
         } catch (error) {
           logger.error({ error: error.message }, "Ошибка в цикле мониторинга");
@@ -610,7 +596,7 @@ class TaskManager {
             );
           }
 
-          await sleep(5);
+          await sleep(10);
         }
       }
     } catch (error) {
