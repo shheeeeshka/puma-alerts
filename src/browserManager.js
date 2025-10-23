@@ -48,6 +48,7 @@ class BrowserManager {
         "--mute-audio",
         "--ignore-certificate-errors",
         "--ignore-ssl-errors",
+        "--timeout=300000",
       ],
       headless: isRunningOnHosting() ? chromium.headless : false,
       ignoreHTTPSErrors: true,
@@ -197,6 +198,7 @@ class BrowserManager {
   }
 
   getPage() {
+    if (!this.page || this.page.isClosed()) return null;
     return this.page;
   }
 

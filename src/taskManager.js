@@ -59,12 +59,18 @@ class TaskManager {
 
   async extractTaskUrlFromModal(page) {
     try {
-      const url = await page.evaluate(() => {
-        const linkElement = document.querySelector(
-          'a[href*="praktikum-admin.yandex-team.ru"]'
-        );
-        return linkElement ? linkElement.href : null;
-      });
+      const url = await page.waitForFunction(
+        () => {
+          const linkElement = document.querySelector(
+            'a[href*="praktikum-admin.yandex-team.ru"]'
+          );
+          return linkElement ? linkElement.href : null;
+        },
+        {
+          timeout: 10000,
+          polling: 500,
+        }
+      );
 
       if (url) {
         logger.info({ url }, "Найдена ссылка на задачу в модальном окне");
@@ -113,40 +119,26 @@ class TaskManager {
         return false;
       });
 
+      await sleep(2);
+      screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
+
       if (buttonClicked) {
-        screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
-
-        await sleep(2);
-
-        try {
-          await this.ensureScreenshotsDir();
-          const htmlContent = await taskPage.content();
-          const htmlPath = path.join(
-            this.screenshotsDir,
-            `debug_html_${Date.now()}.html`
-          );
-          fs.writeFileSync(htmlPath, htmlContent);
-          logger.debug(`HTML сохранен: ${htmlPath}`);
-        } catch (htmlError) {
-          logger.debug("Не удалось сохранить HTML");
-        }
-
         await sleep(1);
 
-        return true; // for debug only
-
         const success = await taskPage.evaluate(() => {
-          const successIndicators = [
-            'button[class*="taken"]',
-            'button[class*="assigned"]',
-            ".status-success",
-            ".alert-success",
-            ".prisma-button2[disabled]",
-          ];
+          const slaTimerRegex =
+            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
 
-          return successIndicators.some((selector) =>
-            document.querySelector(selector)
-          );
+          const pageText = document.body.textContent || document.body.innerText;
+
+          const match = pageText.match(slaTimerRegex);
+
+          if (match) {
+            const timerText = match[0];
+            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
+          }
+
+          return false;
         });
 
         if (success) {
@@ -394,7 +386,6 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(1);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
           if (taskUrl) {
@@ -463,9 +454,75 @@ class TaskManager {
     }
   }
 
+  async recoverBrowser() {
+    try {
+      logger.warn("Запуск восстановления браузера...");
+
+      const wasMonitoring = this.monitoringActive;
+      this.monitoringActive = false;
+
+      if (this.browserManager) {
+        await this.browserManager.close();
+      }
+
+      await sleep(5);
+
+      await this.browserManager.init();
+
+      await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
+
+      this.authNotificationSent = false;
+
+      const isAuthenticated = await this.checkAuth();
+
+      if (isAuthenticated) {
+        logger.info("Браузер успешно восстановлен, авторизация подтверждена");
+
+        if (wasMonitoring) {
+          this.monitoringActive = true;
+          setTimeout(() => this.trackTasks(), 1000);
+        }
+
+        return true;
+      } else {
+        logger.warn("Браузер восстановлен, но требуется авторизация");
+
+        if (wasMonitoring) {
+          await this.notifier.sendText(
+            "❌ Мониторинг остановлен: требуется авторизация после восстановления браузера"
+          );
+        }
+
+        return false;
+      }
+    } catch (error) {
+      logger.error(
+        { error: error.message },
+        "Критическая ошибка восстановления браузера"
+      );
+
+      try {
+        await this.notifier.sendText(
+          "❌ Критическая ошибка восстановления браузера: " + error.message
+        );
+      } catch (notifyError) {
+        logger.error("Не удалось отправить уведомление об ошибке");
+      }
+
+      return false;
+    }
+  }
+
   async checkAuth() {
     const page = this.browserManager.getPage();
     try {
+      if (!page) {
+        logger.warn(
+          "Страница недоступна или закрыта, требуется восстановление браузера"
+        );
+        await this.recoverBrowser();
+        return false;
+      }
       const currentUrl = await page.url();
       if (
         currentUrl.includes("passport.yandex-team.ru") ||
@@ -530,15 +587,8 @@ class TaskManager {
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
         logger.info("Ожидание аутентификации...");
-        await sleep(120);
-
-        const stillNotAuthenticated = await this.checkAuth();
-        if (stillNotAuthenticated) {
-          await this.notifier.sendText(
-            "❌ Мониторинг остановлен: требуется авторизация"
-          );
-          return;
-        }
+        await sleep(60);
+        await this.recoverBrowser();
       }
 
       const { normalTaskKeys, taskTitles, taskCount } =
@@ -557,16 +607,6 @@ class TaskManager {
 
       while (this.monitoringActive) {
         try {
-          const isAuthenticated = await this.checkAuth();
-          if (!isAuthenticated) {
-            await this.notifier.sendText(
-              "❌ Мониторинг остановлен: требуется авторизация"
-            );
-            break;
-          }
-
-          await sleep(1);
-
           const {
             normalTaskKeys: currentTasks,
             taskTitles: currentTitles,
@@ -610,7 +650,32 @@ class TaskManager {
             );
           }
 
-          await sleep(10);
+          if (
+            error.message.includes("detached") ||
+            error.message.includes("PAGE_DETACHED")
+          ) {
+            logger.warn(
+              "Обнаружена отсоединенная страница, пытаемся восстановить..."
+            );
+
+            try {
+              await this.browserManager.close();
+              await sleep(5);
+              await this.browserManager.init();
+              await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
+
+              errorCount = 0;
+              this.lastTaskCount = 0;
+              continue;
+            } catch (recoveryError) {
+              logger.error(
+                { error: recoveryError.message },
+                "Ошибка восстановления браузера"
+              );
+            }
+          }
+
+          await sleep(5);
         }
       }
     } catch (error) {
