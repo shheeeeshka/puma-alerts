@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import logger from "./logger.js";
+import fs from "fs";
 
 config();
 
@@ -60,7 +61,7 @@ class MailService {
       await this.transporter.sendMail(mailOptions);
       logger.info("Email уведомление отправлено");
     } catch (error) {
-      logger.error({ error }, "Ошибка отправки email");
+      logger.error("Ошибка отправки email", { error: error.message });
     }
   }
 }

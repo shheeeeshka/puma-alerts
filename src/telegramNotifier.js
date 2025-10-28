@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import logger from "./logger.js";
 import { restartMonitoring } from "./index.js";
 import CONFIG from "./config.js";
+import mailService from "./mailService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +25,7 @@ class TelegramNotifier {
   }
 
   async startPolling() {
-    logger.info("Запуск long polling для обработки callback-ов...");
+    logger.info("Запуск long polling для обработки callback-ов");
     let offset = 0;
 
     this.pollingInterval = setInterval(async () => {
@@ -52,7 +53,7 @@ class TelegramNotifier {
         }
       } catch (error) {
         if (error.response?.status !== 409) {
-          logger.error({ error }, "Ошибка long polling");
+          logger.error("Ошибка long polling", { error: error.message });
         }
       }
     }, 1000);
@@ -72,7 +73,7 @@ class TelegramNotifier {
         message_id: messageId,
       });
     } catch (error) {
-      logger.debug({ error }, "Не удалось удалить сообщение");
+      logger.debug("Не удалось удалить сообщение", { error: error.message });
     }
   }
 
@@ -91,7 +92,7 @@ class TelegramNotifier {
 
       await axios.post(`${this.apiUrl}/editMessageText`, data);
     } catch (error) {
-      logger.error({ error }, "Ошибка редактирования сообщения");
+      logger.error("Ошибка редактирования сообщения", { error: error.message });
     }
   }
 
@@ -127,7 +128,23 @@ class TelegramNotifier {
       logger.debug("Сообщение отправлено в Telegram");
       return response.data;
     } catch (error) {
-      logger.error({ error }, "Ошибка отправки сообщения в Telegram");
+      logger.error("Ошибка отправки сообщения в Telegram", {
+        error: error.message,
+      });
+
+      try {
+        await mailService.sendAlertMail(
+          "",
+          "",
+          `Telegram Error: ${message.substring(0, 100)}`
+        );
+        logger.info("Отправлено уведомление по почте из-за ошибки Telegram");
+      } catch (mailError) {
+        logger.error("Не удалось отправить уведомление по почте", {
+          error: mailError.message,
+        });
+      }
+
       throw error;
     }
   }
@@ -139,7 +156,9 @@ class TelegramNotifier {
       const fullImagePath = path.join(__dirname, imagePath);
 
       if (!fs.existsSync(fullImagePath)) {
-        throw new Error(`Файл не найден: ${fullImagePath}`);
+        logger.warn("Файл для уведомления не найден", { path: fullImagePath });
+        await this.sendText(`⚠️ Не удалось найти скриншот\n\n${caption}`);
+        return;
       }
 
       const FormData = (await import("form-data")).default;
@@ -164,7 +183,21 @@ class TelegramNotifier {
 
       logger.debug("Уведомление с изображением отправлено");
     } catch (error) {
-      logger.error({ error }, "Ошибка отправки уведомления с изображением");
+      logger.error("Ошибка отправки уведомления с изображением", {
+        error: error.message,
+      });
+
+      try {
+        await mailService.sendAlertMail("", link, `Alert Error: ${caption}`);
+        logger.info(
+          "Отправлено уведомление по почте из-за ошибки Telegram с изображением"
+        );
+      } catch (mailError) {
+        logger.error("Не удалось отправить уведомление по почте", {
+          error: mailError.message,
+        });
+      }
+
       throw error;
     }
   }
@@ -220,7 +253,9 @@ class TelegramNotifier {
 
       logger.debug("Двойное уведомление отправлено");
     } catch (error) {
-      logger.error({ error }, "Ошибка отправки двойного уведомления");
+      logger.error("Ошибка отправки двойного уведомления", {
+        error: error.message,
+      });
       throw error;
     }
   }
@@ -350,7 +385,7 @@ class TelegramNotifier {
         text: "Команда выполнена",
       });
     } catch (error) {
-      logger.error({ error }, "Ошибка обработки callback");
+      logger.error("Ошибка обработки callback", { error: error.message });
     }
   }
 
@@ -437,7 +472,7 @@ class TelegramNotifier {
   }
 
   async listenForChatId() {
-    logger.info("Ожидание сообщения для получения chatId...");
+    logger.info("Ожидание сообщения для получения chatId");
     let offset = 0;
 
     while (true) {
@@ -474,7 +509,7 @@ class TelegramNotifier {
           offset = updates[updates.length - 1].update_id + 1;
         }
       } catch (err) {
-        logger.error({ err }, "Ошибка получения chatId");
+        logger.error("Ошибка получения chatId", { error: err.message });
       }
       await new Promise((res) => setTimeout(res, 1000));
     }
