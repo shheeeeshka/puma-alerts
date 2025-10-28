@@ -65,34 +65,27 @@ class TaskManager {
 
   async extractTaskUrlFromModal(page) {
     try {
-      logger.debug("Извлечение URL задачи из модального окна");
+      await page.waitForSelector('a[href*="praktikum-admin.yandex-team.ru"]', {
+        timeout: 5000,
+      });
 
-      const url = await page.waitForFunction(
-        () => {
-          const linkElement = document.querySelector(
-            'a[href*="praktikum-admin.yandex-team.ru"]'
-          );
-          return linkElement ? linkElement.href : null;
-        },
-        {
-          timeout: 15000,
-          polling: 500,
-        }
-      );
+      const url = await page.evaluate(() => {
+        const linkElement = document.querySelector(
+          'a[href*="praktikum-admin.yandex-team.ru"]'
+        );
+        return linkElement ? linkElement.href : null;
+      });
 
       if (url) {
-        const urlValue = await url.jsonValue();
-        logger.info("Найдена ссылка на задачу в модальном окне", {
-          url: urlValue,
-        });
-        return urlValue;
+        logger.info({ url }, "Найдена ссылка на задачу в модальном окне");
+        return url;
       }
-      logger.debug("Ссылка на задачу не найдена в модальном окне");
       return null;
     } catch (error) {
-      logger.error("Ошибка извлечения URL из модального окна", {
-        error: error.message,
-      });
+      logger.error(
+        { error: error.message },
+        "Ошибка извлечения URL из модального окна"
+      );
       return null;
     }
   }
@@ -104,7 +97,7 @@ class TaskManager {
       logger.debug("Попытка взять задачу на странице практикума");
       await taskPage.bringToFront();
 
-      await sleep(2);
+      // await sleep(2);
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
@@ -135,11 +128,11 @@ class TaskManager {
 
       logger.debug("Клик по кнопке выполнен", { clicked: buttonClicked });
 
-      await sleep(3);
+      await sleep(1.2);
       screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
 
       if (buttonClicked) {
-        await sleep(2);
+        await sleep(1.2);
 
         const success = await taskPage.evaluate(() => {
           const slaTimerRegex =
@@ -198,11 +191,11 @@ class TaskManager {
       try {
         logger.debug("Переход на страницу задачи", { url: taskUrl });
         await taskPage.goto(taskUrl, {
-          waitUntil: "domcontentloaded",
+          waitUntil: "networkidle0",
           timeout: 15000,
         });
 
-        await sleep(2);
+        // await sleep(1);
 
         const { success, screenshotPath } = await this.takeTaskOnPraktikumPage(
           taskPage
@@ -216,8 +209,9 @@ class TaskManager {
           });
 
           if (screenshotPath) {
+            const relativePath = path.relative(__dirname, screenshotPath);
             await this.notifier.sendAlert({
-              imagePath: screenshotPath,
+              imagePath: relativePath,
               link: taskUrl,
               caption: `✅ Задача взята в работу\n\n${taskTitle}\n\nВзято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`,
               showBoardButton: true,
@@ -273,7 +267,7 @@ class TaskManager {
       });
       await sleep(0.5);
     } catch (error) {
-      logger.debug("Ошибка закрытия модального окна", { error: error.message });
+      logger.debug("Ошибка закрытия модального окна");
     }
   }
 
@@ -285,7 +279,6 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
-      await sleep(2);
 
       logger.debug("Поиск секции обычных задач");
 
@@ -443,7 +436,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(2);
+          await sleep(0.4);
 
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
 
@@ -459,7 +452,6 @@ class TaskManager {
           }
 
           await this.closeModal(mainPage);
-          await sleep(1);
         } else {
           logger.warn("Не удалось кликнуть по задаче", { taskKey });
         }
@@ -539,7 +531,7 @@ class TaskManager {
         await this.browserManager.close();
       }
 
-      await sleep(5);
+      await sleep(4);
 
       await this.browserManager.init();
 
