@@ -40,10 +40,10 @@ class TaskManager {
         fullPage: false,
         type: "png",
       });
-      logger.debug("Скриншот сделан", { path: screenshotPath });
+      logger.info("Скриншот сделан", { path: screenshotPath });
       return screenshotPath;
     } catch (error) {
-      logger.debug("Не удалось сделать скриншот", { error: error.message });
+      logger.info("Не удалось сделать скриншот", { error: error.message });
       return null;
     }
   }
@@ -94,30 +94,27 @@ class TaskManager {
     let screenshotPath = null;
 
     try {
-      logger.debug("Попытка взять задачу на странице практикума");
+      logger.info("Попытка взять задачу на странице практикума");
       await taskPage.bringToFront();
 
-      // await sleep(2);
+      await sleep(1.2);
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
-          ".prisma-button2",
-          'button[class*="take"]',
-          'button[class*="work"]',
-          'button[class*="assign"]',
-          'button[type="button"]',
+          'button[data-qa*="take"]',
+          'button[data-qa*="assign"]',
+          'button[title*="Взять"]',
+          ".prisma-button2--action",
+          'button:contains("Взять")',
+          'button:contains("Take")',
+          'button:contains("Assign")',
         ];
 
         for (const selector of buttons) {
           const elements = document.querySelectorAll(selector);
           for (const element of elements) {
             const text = element.textContent.toLowerCase();
-            if (
-              text.includes("взять") ||
-              text.includes("take") ||
-              text.includes("work") ||
-              text.includes("assign")
-            ) {
+            if (element.offsetParent !== null) {
               element.click();
               return true;
             }
@@ -126,7 +123,7 @@ class TaskManager {
         return false;
       });
 
-      logger.debug("Клик по кнопке выполнен", { clicked: buttonClicked });
+      logger.info("Клик по кнопке выполнен", { clicked: buttonClicked });
 
       await sleep(1.2);
       screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
@@ -150,7 +147,7 @@ class TaskManager {
           return false;
         });
 
-        logger.debug("Проверка успешности взятия задачи", { success });
+        logger.info("Проверка успешности взятия задачи", { success });
         return { success: success, screenshotPath };
       }
 
@@ -165,7 +162,7 @@ class TaskManager {
 
   async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
-      logger.debug("Автозабор отключен или достигнут лимит", {
+      logger.info("Автозабор отключен или достигнут лимит", {
         autoAssign: CONFIG.autoAssign,
         tasksTaken: this.tasksTaken,
         maxTasks: CONFIG.maxTasks,
@@ -189,7 +186,7 @@ class TaskManager {
       }
 
       try {
-        logger.debug("Переход на страницу задачи", { url: taskUrl });
+        logger.info("Переход на страницу задачи", { url: taskUrl });
         await taskPage.goto(taskUrl, {
           waitUntil: "networkidle0",
           timeout: 15000,
@@ -267,7 +264,7 @@ class TaskManager {
       });
       await sleep(0.5);
     } catch (error) {
-      logger.debug("Ошибка закрытия модального окна");
+      logger.info("Ошибка закрытия модального окна");
     }
   }
 
@@ -280,7 +277,7 @@ class TaskManager {
     try {
       await this.browserManager.reloadPage();
 
-      logger.debug("Поиск секции обычных задач");
+      logger.info("Поиск секции обычных задач");
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -331,7 +328,7 @@ class TaskManager {
         };
       });
 
-      logger.debug("Найдены задачи", {
+      logger.info("Найдены задачи", {
         taskCount: result.normalTaskKeys.length,
         tasks: result.normalTaskKeys,
       });
@@ -368,7 +365,7 @@ class TaskManager {
       }
     }
 
-    logger.debug("Задачи отфильтрованы по спринтам", {
+    logger.info("Задачи отфильтрованы по спринтам", {
       original: tasks.length,
       filtered: filteredTasks.length,
     });
@@ -395,14 +392,14 @@ class TaskManager {
           this.notifiedTasks.has(taskKey) &&
           !this.failedAssignmentTasks.has(taskKey)
         ) {
-          logger.debug("Задача уже уведомлена, пропускаем", { taskKey });
+          logger.info("Задача уже уведомлена, пропускаем", { taskKey });
           continue;
         }
         tasksToProcess.push(taskKey);
       }
 
       if (tasksToProcess.length === 0) {
-        logger.debug("Нет новых задач для обработки");
+        logger.info("Нет новых задач для обработки");
         return;
       }
 
@@ -414,7 +411,7 @@ class TaskManager {
       for (const taskKey of tasksToProcess) {
         const taskTitle = taskTitles[taskKey];
 
-        logger.debug("Клик по задаче для открытия модального окна", {
+        logger.info("Клик по задаче для открытия модального окна", {
           taskKey,
         });
 
