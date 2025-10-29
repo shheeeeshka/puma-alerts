@@ -276,6 +276,7 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
+      await sleep(1.5); // <- for debug
 
       logger.info("Поиск секции обычных задач");
 
