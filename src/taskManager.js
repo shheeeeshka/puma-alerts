@@ -37,11 +37,10 @@ class TaskManager {
       );
       await page.screenshot({
         path: screenshotPath,
-        fullPage: false,
         type: "png",
       });
       logger.info("Скриншот сделан", { path: screenshotPath });
-      return screenshotPath;
+      return path.relative(process.cwd(), screenshotPath);
     } catch (error) {
       logger.info("Не удалось сделать скриншот", { error: error.message });
       return null;
@@ -192,7 +191,13 @@ class TaskManager {
           timeout: 15000,
         });
 
-        // await sleep(1);
+        const debugScreenshotPath = await this.takeScreenshot(
+          taskPage,
+          "debug_before_click"
+        );
+        logger.info("Скриншот перед кликом сделан", {
+          path: debugScreenshotPath,
+        });
 
         const { success, screenshotPath } = await this.takeTaskOnPraktikumPage(
           taskPage
@@ -217,7 +222,7 @@ class TaskManager {
 
           this.failedAssignmentTasks.delete(taskKey);
         } else {
-          logger.warn("Не удалось взять задачу", { taskKey });
+          logger.info("Не удалось взять задачу", { taskKey });
           this.failedAssignmentTasks.add(taskKey);
         }
 
@@ -446,12 +451,12 @@ class TaskManager {
             });
             this.notifiedTasks.add(taskKey);
           } else {
-            logger.warn("Не удалось получить URL для задачи", { taskKey });
+            logger.info("Не удалось получить URL для задачи", { taskKey });
           }
 
           await this.closeModal(mainPage);
         } else {
-          logger.warn("Не удалось кликнуть по задаче", { taskKey });
+          logger.info("Не удалось кликнуть по задаче", { taskKey });
         }
       }
 
@@ -520,7 +525,7 @@ class TaskManager {
 
   async recoverBrowser() {
     try {
-      logger.warn("Запуск восстановления браузера");
+      logger.info("Запуск восстановления браузера");
 
       const wasMonitoring = this.monitoringActive;
       this.monitoringActive = false;
@@ -549,7 +554,7 @@ class TaskManager {
 
         return true;
       } else {
-        logger.warn("Браузер восстановлен, но требуется авторизация");
+        logger.info("Браузер восстановлен, но требуется авторизация");
 
         if (wasMonitoring) {
           await this.notifier.sendText(
@@ -582,7 +587,7 @@ class TaskManager {
     const page = this.browserManager.getPage();
     try {
       if (!page) {
-        logger.warn(
+        logger.info(
           "Страница недоступна или закрыта, требуется восстановление браузера"
         );
         await this.recoverBrowser();
@@ -593,7 +598,7 @@ class TaskManager {
         currentUrl.includes("passport.yandex-team.ru") ||
         currentUrl.includes("passport?mode=auth")
       ) {
-        logger.warn("Обнаружена страница авторизации по URL");
+        logger.info("Обнаружена страница авторизации по URL");
 
         if (!this.authNotificationSent) {
           await this.notifier.sendText("⚠️ Требуется авторизация в системе");
@@ -624,7 +629,7 @@ class TaskManager {
       });
 
       if (isAuthRequired) {
-        logger.warn("Обнаружена форма авторизации");
+        logger.info("Обнаружена форма авторизации");
 
         if (!this.authNotificationSent) {
           await this.notifier.sendText("⚠️ Требуется авторизация в системе");
@@ -696,7 +701,7 @@ class TaskManager {
 
           const allTasksToProcess = [...newTasks, ...retryTasks];
 
-          if (allTasksToProcess.length > 0) {
+          if (newTasks.length > 0) {
             logger.info(
               "Обнаружены новые задачи или задачи для повторной попытки",
               {
@@ -729,7 +734,7 @@ class TaskManager {
             error.message.includes("detached") ||
             error.message.includes("PAGE_DETACHED")
           ) {
-            logger.warn(
+            logger.info(
               "Обнаружена отсоединенная страница, пытаемся восстановить"
             );
 
