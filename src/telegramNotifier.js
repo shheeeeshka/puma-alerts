@@ -153,7 +153,7 @@ class TelegramNotifier {
     if (!this.chatId) return;
 
     try {
-      const fullImagePath = path.join(__dirname, imagePath);
+      const fullImagePath = path.join(__dirname, "..", "screenshots", imagePath);
 
       if (!fs.existsSync(fullImagePath)) {
         logger.warn("Файл для уведомления не найден", { path: fullImagePath });
