@@ -31,18 +31,18 @@ class TaskManager {
   async takeScreenshot(page, name) {
     try {
       await this.ensureScreenshotsDir();
-      const screenshotPath = path.join(
-        this.screenshotsDir,
-        `${name}_${Date.now()}.png`
-      );
+      const filename = `${name}_${Date.now()}.png`;
+      const screenshotPath = path.join(this.screenshotsDir, filename);
+      
       await page.screenshot({
         path: screenshotPath,
         type: "png",
       });
+      
       logger.info("Скриншот сделан", { path: screenshotPath });
-      return path.relative(process.cwd(), screenshotPath);
+      return filename;
     } catch (error) {
-      logger.info("Не удалось сделать скриншот", { error: error.message });
+      logger.error("Не удалось сделать скриншот", { error: error.message });
       return null;
     }
   }
@@ -94,7 +94,32 @@ class TaskManager {
 
     try {
       logger.info("Попытка взять задачу на странице практикума");
+      
+      const beforeScreenshot = await this.takeScreenshot(taskPage, "before_any_actions");
+      logger.info("Скриншот до действий", { path: beforeScreenshot });
+
       await taskPage.bringToFront();
+
+      const buttonInfo = await taskPage.evaluate(() => {
+        const buttons = ['button[data-qa*="take"]', 'button[data-qa*="assign"]', 'button[title*="Взять"]', ".prisma-button2--action"];
+        const results = [];
+        
+        for (const selector of buttons) {
+          const element = document.querySelector(selector);
+          if (element) {
+            results.push({
+              selector,
+              visible: element.offsetParent !== null,
+              text: element.textContent,
+              disabled: element.disabled,
+              clickable: element.offsetParent !== null && !element.disabled
+            });
+          }
+        }
+        return results;
+      });
+
+      logger.info("Диагностика кнопок", { buttons: buttonInfo });
 
       await sleep(1.2);
 
@@ -211,9 +236,8 @@ class TaskManager {
           });
 
           if (screenshotPath) {
-            const relativePath = path.relative(__dirname, screenshotPath);
             await this.notifier.sendAlert({
-              imagePath: relativePath,
+              imagePath: screenshotPath,
               link: taskUrl,
               caption: `✅ Задача взята в работу\n\n${taskTitle}\n\nВзято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`,
               showBoardButton: true,
@@ -281,7 +305,7 @@ class TaskManager {
 
     try {
       await this.browserManager.reloadPage();
-      await sleep(1.5); // <- for debug
+      await sleep(1.5);
 
       logger.info("Поиск секции обычных задач");
 
@@ -394,13 +418,6 @@ class TaskManager {
       const tasksWithUrls = [];
 
       for (const taskKey of newTasks) {
-        if (
-          this.notifiedTasks.has(taskKey) &&
-          !this.failedAssignmentTasks.has(taskKey)
-        ) {
-          logger.info("Задача уже уведомлена, пропускаем", { taskKey });
-          continue;
-        }
         tasksToProcess.push(taskKey);
       }
 
@@ -415,6 +432,14 @@ class TaskManager {
       });
 
       for (const taskKey of tasksToProcess) {
+        if (
+          this.notifiedTasks.has(taskKey) &&
+          !this.failedAssignmentTasks.has(taskKey)
+        ) {
+          logger.info("Задача уже уведомлена, пропускаем", { taskKey });
+          continue;
+        }
+
         const taskTitle = taskTitles[taskKey];
 
         logger.info("Клик по задаче для открытия модального окна", {
