@@ -16,7 +16,7 @@ class TaskManager {
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(__dirname, "screenshots");
+    this.screenshotsDir = path.join(process.cwd(), "screenshots");
 
     this.notifiedTasks = new Set();
     this.failedAssignmentTasks = new Set();
@@ -33,12 +33,12 @@ class TaskManager {
       await this.ensureScreenshotsDir();
       const filename = `${name}_${Date.now()}.png`;
       const screenshotPath = path.join(this.screenshotsDir, filename);
-      
+
       await page.screenshot({
         path: screenshotPath,
         type: "png",
       });
-      
+
       logger.info("Скриншот сделан", { path: screenshotPath });
       return filename;
     } catch (error) {
@@ -94,16 +94,25 @@ class TaskManager {
 
     try {
       logger.info("Попытка взять задачу на странице практикума");
-      
-      const beforeScreenshot = await this.takeScreenshot(taskPage, "before_any_actions");
+
+      const beforeScreenshot = await this.takeScreenshot(
+        taskPage,
+        "before_any_actions"
+      );
       logger.info("Скриншот до действий", { path: beforeScreenshot });
 
       await taskPage.bringToFront();
 
       const buttonInfo = await taskPage.evaluate(() => {
-        const buttons = ['button[data-qa*="take"]', 'button[data-qa*="assign"]', 'button[title*="Взять"]', ".prisma-button2--action"];
+        const buttons = [
+          ".review-header__button-take",
+          'button[data-qa*="take"]',
+          'button[data-qa*="assign"]',
+          'button[title*="Взять"]',
+          ".prisma-button2--action",
+        ];
         const results = [];
-        
+
         for (const selector of buttons) {
           const element = document.querySelector(selector);
           if (element) {
@@ -112,7 +121,7 @@ class TaskManager {
               visible: element.offsetParent !== null,
               text: element.textContent,
               disabled: element.disabled,
-              clickable: element.offsetParent !== null && !element.disabled
+              clickable: element.offsetParent !== null && !element.disabled,
             });
           }
         }
@@ -123,29 +132,36 @@ class TaskManager {
 
       await sleep(1.2);
 
-      const buttonClicked = await taskPage.evaluate(() => {
-        const buttons = [
-          'button[data-qa*="take"]',
-          'button[data-qa*="assign"]',
-          'button[title*="Взять"]',
-          ".prisma-button2--action",
-          'button:contains("Взять")',
-          'button:contains("Take")',
-          'button:contains("Assign")',
-        ];
+      let buttonClicked = false;
+      const buttonSelectors = [
+        ".review-header__button-take",
+        'button[data-qa*="take"]',
+        'button[data-qa*="assign"]',
+        'button[title*="Взять"]',
+        ".prisma-button2--action",
+      ];
 
-        for (const selector of buttons) {
-          const elements = document.querySelectorAll(selector);
-          for (const element of elements) {
-            const text = element.textContent.toLowerCase();
-            if (element.offsetParent !== null) {
-              element.click();
-              return true;
+      for (const selector of buttonSelectors) {
+        try {
+          const button = await taskPage.$(selector);
+          if (button) {
+            const isVisible = await button.isIntersectingViewport();
+            const isDisabled = await taskPage.evaluate(
+              (el) => el.disabled,
+              button
+            );
+
+            if (isVisible && !isDisabled) {
+              await button.click();
+              buttonClicked = true;
+              logger.info(`Успешно кликнули по кнопке: ${selector}`);
+              break;
             }
           }
+        } catch (error) {
+          continue;
         }
-        return false;
-      });
+      }
 
       logger.info("Клик по кнопке выполнен", { clicked: buttonClicked });
 
@@ -156,19 +172,20 @@ class TaskManager {
         await sleep(1.2);
 
         const success = await taskPage.evaluate(() => {
-          const slaTimerRegex =
-            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
+          const takeButtons = document.querySelectorAll(
+            '.review-header__button-take, button[data-qa*="take"], button[title*="Взять"], button:contains("Взять")'
+          );
+          const hasTakeButton = Array.from(takeButtons).some(
+            (btn) => btn.offsetParent !== null && !btn.disabled
+          );
 
-          const pageText = document.body.textContent || document.body.innerText;
+          const hasTimer = document.body.textContent.includes("Таймер");
+          const inProgress = document.body.textContent.includes("В работе");
+          const hasSubmitButton = document.querySelector(
+            'button[data-qa*="submit"], button:contains("Сдать")'
+          );
 
-          const match = pageText.match(slaTimerRegex);
-
-          if (match) {
-            const timerText = match[0];
-            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
-          }
-
-          return false;
+          return !hasTakeButton && (hasTimer || inProgress || hasSubmitButton);
         });
 
         logger.info("Проверка успешности взятия задачи", { success });
