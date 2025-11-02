@@ -105,7 +105,6 @@ class TaskManager {
 
       const buttonInfo = await taskPage.evaluate(() => {
         const buttons = [
-          ".review-header__button-take",
           'button[data-qa*="take"]',
           'button[data-qa*="assign"]',
           'button[title*="Взять"]',
@@ -132,36 +131,29 @@ class TaskManager {
 
       await sleep(1.2);
 
-      let buttonClicked = false;
-      const buttonSelectors = [
-        ".review-header__button-take",
-        'button[data-qa*="take"]',
-        'button[data-qa*="assign"]',
-        'button[title*="Взять"]',
-        ".prisma-button2--action",
-      ];
+      const buttonClicked = await taskPage.evaluate(() => {
+        const buttons = [
+          'button[data-qa*="take"]',
+          'button[data-qa*="assign"]',
+          'button[title*="Взять"]',
+          ".prisma-button2--action",
+          'button:contains("Взять")',
+          'button:contains("Take")',
+          'button:contains("Assign")',
+        ];
 
-      for (const selector of buttonSelectors) {
-        try {
-          const button = await taskPage.$(selector);
-          if (button) {
-            const isVisible = await button.isIntersectingViewport();
-            const isDisabled = await taskPage.evaluate(
-              (el) => el.disabled,
-              button
-            );
-
-            if (isVisible && !isDisabled) {
-              await button.click();
-              buttonClicked = true;
-              logger.info(`Успешно кликнули по кнопке: ${selector}`);
-              break;
+        for (const selector of buttons) {
+          const elements = document.querySelectorAll(selector);
+          for (const element of elements) {
+            const text = element.textContent.toLowerCase();
+            if (element.offsetParent !== null) {
+              element.click();
+              return true;
             }
           }
-        } catch (error) {
-          continue;
         }
-      }
+        return false;
+      });
 
       logger.info("Клик по кнопке выполнен", { clicked: buttonClicked });
 
@@ -172,20 +164,19 @@ class TaskManager {
         await sleep(1.2);
 
         const success = await taskPage.evaluate(() => {
-          const takeButtons = document.querySelectorAll(
-            '.review-header__button-take, button[data-qa*="take"], button[title*="Взять"], button:contains("Взять")'
-          );
-          const hasTakeButton = Array.from(takeButtons).some(
-            (btn) => btn.offsetParent !== null && !btn.disabled
-          );
+          const slaTimerRegex =
+            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
 
-          const hasTimer = document.body.textContent.includes("Таймер");
-          const inProgress = document.body.textContent.includes("В работе");
-          const hasSubmitButton = document.querySelector(
-            'button[data-qa*="submit"], button:contains("Сдать")'
-          );
+          const pageText = document.body.textContent || document.body.innerText;
 
-          return !hasTakeButton && (hasTimer || inProgress || hasSubmitButton);
+          const match = pageText.match(slaTimerRegex);
+
+          if (match) {
+            const timerText = match[0];
+            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
+          }
+
+          return false;
         });
 
         logger.info("Проверка успешности взятия задачи", { success });
