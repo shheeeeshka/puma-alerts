@@ -16,7 +16,7 @@ class TaskManager {
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(process.cwd(), "screenshots");
+    this.screenshotsDir = path.join(process.cwd(), "..", "screenshots");
 
     this.notifiedTasks = new Set();
     this.failedAssignmentTasks = new Set();
@@ -95,49 +95,17 @@ class TaskManager {
     try {
       logger.info("Попытка взять задачу на странице практикума");
 
-      const beforeScreenshot = await this.takeScreenshot(
-        taskPage,
-        "before_any_actions"
-      );
-      logger.info("Скриншот до действий", { path: beforeScreenshot });
-
       await taskPage.bringToFront();
 
-      const buttonInfo = await taskPage.evaluate(() => {
-        const buttons = [
-          'button[data-qa*="take"]',
-          'button[data-qa*="assign"]',
-          'button[title*="Взять"]',
-          ".prisma-button2--action",
-        ];
-        const results = [];
-
-        for (const selector of buttons) {
-          const element = document.querySelector(selector);
-          if (element) {
-            results.push({
-              selector,
-              visible: element.offsetParent !== null,
-              text: element.textContent,
-              disabled: element.disabled,
-              clickable: element.offsetParent !== null && !element.disabled,
-            });
-          }
-        }
-        return results;
-      });
-
-      logger.info("Диагностика кнопок", { buttons: buttonInfo });
-
-      await sleep(1.2);
+      await sleep(0.5);
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
-          'button[data-qa*="take"]',
-          'button[data-qa*="assign"]',
-          'button[title*="Взять"]',
           ".prisma-button2--action",
+          'button[title*="Взять"]',
           'button:contains("Взять")',
+          'button[data-qa*="assign"]',
+          'button[data-qa*="take"]',
           'button:contains("Take")',
           'button:contains("Assign")',
         ];
@@ -157,7 +125,7 @@ class TaskManager {
 
       logger.info("Клик по кнопке выполнен", { clicked: buttonClicked });
 
-      await sleep(1.2);
+      await sleep(1.5);
       screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
 
       if (buttonClicked) {

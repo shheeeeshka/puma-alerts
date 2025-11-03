@@ -30,7 +30,7 @@ class MailService {
     }
 
     try {
-      const imagePath = path.join(__dirname, "screenshots", imageName);
+      const imagePath = path.join(__dirname, "..", "screenshots", imageName);
 
       const emailContent = message
         ? `<div style="text-align: center;">
