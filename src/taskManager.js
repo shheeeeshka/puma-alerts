@@ -96,8 +96,29 @@ class TaskManager {
       logger.info("Попытка взять задачу на странице практикума");
 
       await taskPage.bringToFront();
-
       await sleep(0.5);
+
+      const requests = [];
+      const responseHandler = (response) => {
+        const request = response.request();
+        if (
+          request.url().includes("assign") ||
+          request.url().includes("take")
+        ) {
+          requests.push({
+            url: request.url(),
+            method: request.method(),
+            headers: request.headers(),
+            postData: request.postData(),
+            response: {
+              status: response.status(),
+              headers: response.headers(),
+            },
+          });
+        }
+      };
+
+      taskPage.on("response", responseHandler);
 
       const buttonClicked = await taskPage.evaluate(() => {
         const buttons = [
@@ -134,23 +155,56 @@ class TaskManager {
         const success = await taskPage.evaluate(() => {
           const slaTimerRegex =
             /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
-
           const pageText = document.body.textContent || document.body.innerText;
-
           const match = pageText.match(slaTimerRegex);
-
           if (match) {
             const timerText = match[0];
             return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
           }
-
           return false;
         });
+
+        if (success && requests.length > 0) {
+          const requestData = requests[0];
+          try {
+            const responseBody = await taskPage.evaluate((url) => {
+              return fetch(url)
+                .then((r) => r.text())
+                .catch(() => null);
+            }, requestData.url);
+
+            requestData.response.body = responseBody;
+
+            const fs = await import("fs");
+            const path = await import("path");
+            const requestLogPath = path.join(
+              process.cwd(),
+              "..",
+              "request_logs"
+            );
+            if (!fs.existsSync(requestLogPath)) {
+              fs.mkdirSync(requestLogPath, { recursive: true });
+            }
+
+            const filename = `request_${Date.now()}.json`;
+            const filePath = path.join(requestLogPath, filename);
+            fs.writeFileSync(filePath, JSON.stringify(requestData, null, 2));
+
+            logger.info("Запрос сохранен", { path: filePath });
+          } catch (saveError) {
+            logger.error("Ошибка сохранения запроса", {
+              error: saveError.message,
+            });
+          }
+        }
+
+        taskPage.off("response", responseHandler);
 
         logger.info("Проверка успешности взятия задачи", { success });
         return { success: success, screenshotPath };
       }
 
+      taskPage.off("response", responseHandler);
       return { success: false, screenshotPath };
     } catch (error) {
       logger.error("Ошибка взятия задачи на странице практикума", {
