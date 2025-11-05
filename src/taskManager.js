@@ -115,6 +115,10 @@ class TaskManager {
 
         if (buttonClicked) {
           await sleep(1.2);
+          await taskPage.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+          });
+          await sleep(1.5);
           const success = await taskPage.evaluate(() => {
             const hasTimer = document
               .querySelector(".review-header__review-status_status_reviewing")
@@ -131,6 +135,7 @@ class TaskManager {
 
             return hasTimer && hasButtons;
           });
+          await this.takeScreenshot(taskPage, "assign_attempt");
           return { success, method: "ui" };
         }
         return { success: false, method: "ui" };
