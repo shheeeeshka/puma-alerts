@@ -7,7 +7,6 @@ export const CONFIG = {
     ? process.env.SPRINT_WHITELIST.split(",").map((s) => s.trim())
     : [],
   maxTasks: parseInt(process.env.MAX_TASKS) || 4,
-  targetUrl: process.env.TARGET_URL,
   targetBoardUrl: process.env.TARGET_BOARD_URL,
   userAgent:
     process.env.USER_AGENT ||

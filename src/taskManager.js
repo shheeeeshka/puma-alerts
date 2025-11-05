@@ -4,6 +4,7 @@ import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import HttpTaskService from "./httpTaskService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,14 +13,14 @@ class TaskManager {
   constructor(browserManager, notifier) {
     this.browserManager = browserManager;
     this.notifier = notifier;
+    this.httpTaskService = new HttpTaskService(browserManager);
     this.tasksTaken = 0;
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(process.cwd(), "..", "screenshots");
-
+    this.screenshotsDir = path.join(process.cwd(), "screenshots");
     this.notifiedTasks = new Set();
-    this.failedAssignmentTasks = new Set();
+    this.processingTasks = new Set();
   }
 
   async ensureScreenshotsDir() {
@@ -33,12 +34,7 @@ class TaskManager {
       await this.ensureScreenshotsDir();
       const filename = `${name}_${Date.now()}.png`;
       const screenshotPath = path.join(this.screenshotsDir, filename);
-
-      await page.screenshot({
-        path: screenshotPath,
-        type: "png",
-      });
-
+      await page.screenshot({ path: screenshotPath, type: "png" });
       logger.info("Скриншот сделан", { path: screenshotPath });
       return filename;
     } catch (error) {
@@ -52,7 +48,7 @@ class TaskManager {
     this.tasksTaken = 0;
     this.authNotificationSent = false;
     this.notifiedTasks.clear();
-    this.failedAssignmentTasks.clear();
+    this.processingTasks.clear();
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -67,229 +63,114 @@ class TaskManager {
       await page.waitForSelector('a[href*="praktikum-admin.yandex-team.ru"]', {
         timeout: 5000,
       });
-
       const url = await page.evaluate(() => {
         const linkElement = document.querySelector(
           'a[href*="praktikum-admin.yandex-team.ru"]'
         );
         return linkElement ? linkElement.href : null;
       });
-
       if (url) {
         logger.info({ url }, "Найдена ссылка на задачу в модальном окне");
         return url;
       }
       return null;
     } catch (error) {
-      logger.error(
-        { error: error.message },
-        "Ошибка извлечения URL из модального окна"
-      );
+      logger.error("Ошибка извлечения URL из модального окна", {
+        error: error.message,
+      });
       return null;
     }
   }
 
-  async takeTaskOnPraktikumPage(taskPage) {
-    let screenshotPath = null;
-
+  async takeTaskOnPraktikumPage(taskUrl) {
     try {
-      logger.info("Попытка взять задачу на странице практикума");
-
-      await taskPage.bringToFront();
-      await sleep(0.5);
-
-      const allRequests = [];
-      const requestLogPath = path.join(process.cwd(), "..", "request_logs");
-
-      if (!fs.existsSync(requestLogPath)) {
-        fs.mkdirSync(requestLogPath, { recursive: true });
+      const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
+      if (httpSuccess) {
+        logger.info("Task taken successfully via HTTP");
+        return { success: true, method: "http" };
       }
 
-      const responseHandler = (response) => {
-        const request = response.request();
-        allRequests.push({
-          url: request.url(),
-          method: request.method(),
-          headers: request.headers(),
-          postData: request.postData(),
-          response: {
-            status: response.status(),
-            headers: response.headers(),
-          },
-          timestamp: new Date().toISOString(),
+      logger.info("Falling back to UI method");
+      const taskPage = await this.browserManager.openNewTab();
+      try {
+        await taskPage.goto(taskUrl, {
+          waitUntil: "networkidle0",
+          timeout: 15000,
         });
-      };
-
-      taskPage.on("response", responseHandler);
-
-      const buttonClicked = await taskPage.evaluate(() => {
-        const buttons = [
-          ".prisma-button2--action",
-          'button[title*="Взять"]',
-          'button:contains("Взять")',
-          // 'button[data-qa*="assign"]',
-          // 'button[data-qa*="take"]',
-          // 'button:contains("Take")',
-          // 'button:contains("Assign")',
-        ];
-
-        for (const selector of buttons) {
-          const elements = document.querySelectorAll(selector);
-          for (const element of elements) {
-            const text = element.textContent.toLowerCase();
-            if (element.offsetParent !== null) {
+        const buttonClicked = await taskPage.evaluate(() => {
+          const selectors = [
+            ".review-header__button-take",
+            ".prisma-button2_view_primary",
+            'button:contains("Взять")',
+          ];
+          for (const selector of selectors) {
+            const element = document.querySelector(selector);
+            if (element?.offsetParent && !element.disabled) {
               element.click();
               return true;
             }
           }
-        }
-        return false;
-      });
-
-      logger.info("Клик по кнопке выполнен", { clicked: buttonClicked });
-
-      await sleep(1.5);
-      screenshotPath = await this.takeScreenshot(taskPage, "task_clicked");
-
-      if (buttonClicked) {
-        await sleep(1.2);
-
-        const success = await taskPage.evaluate(() => {
-          const slaTimerRegex =
-            /Таймер\s*SLA:?\s*.*?(?:\d+ч\s*\d+м|\d+[\sччасов]*\d+[\sмминут])/i;
-          const pageText = document.body.textContent || document.body.innerText;
-          const match = pageText.match(slaTimerRegex);
-          if (match) {
-            const timerText = match[0];
-            return !timerText.includes("0ч 0м") && /\d+[ччh]/.test(timerText);
-          }
           return false;
         });
 
-        taskPage.off("response", responseHandler);
+        if (buttonClicked) {
+          await sleep(1.2);
+          const success = await taskPage.evaluate(() => {
+            const hasTimer = document
+              .querySelector(".review-header__review-status_status_reviewing")
+              ?.textContent?.includes("Таймер SLA");
+            const reviewFooter = document.querySelector(".review-footer");
+            const hasButtons =
+              reviewFooter &&
+              reviewFooter.querySelector(
+                'button[class*="review-footer-action_type_fill-rubricator"]'
+              ) &&
+              reviewFooter.querySelector(
+                'button[class*="review-footer-action_type_fail"]'
+              );
 
-        if (allRequests.length > 0) {
-          try {
-            const logData = {
-              metadata: {
-                timestamp: new Date().toISOString(),
-                success: success,
-                buttonClicked: buttonClicked,
-                tasksTaken: this.tasksTaken,
-                maxTasks: CONFIG.maxTasks,
-              },
-              requests: allRequests,
-            };
-
-            const filename = `requests_${Date.now()}.json`;
-            const filePath = path.join(requestLogPath, filename);
-            fs.writeFileSync(filePath, JSON.stringify(logData, null, 2));
-
-            logger.info("Все запросы сохранены", {
-              path: filePath,
-              requestsCount: allRequests.length,
-              success: success,
-            });
-          } catch (saveError) {
-            logger.error("Ошибка сохранения запросов", {
-              error: saveError.message,
-            });
-          }
+            return hasTimer && hasButtons;
+          });
+          return { success, method: "ui" };
         }
-
-        logger.info("Проверка успешности взятия задачи", { success });
-        return { success: success, screenshotPath };
+        return { success: false, method: "ui" };
+      } finally {
+        await taskPage.close();
       }
-
-      taskPage.off("response", responseHandler);
-      return { success: false, screenshotPath };
     } catch (error) {
-      logger.error("Ошибка взятия задачи на странице практикума", {
-        error: error.message,
-      });
-      return { success: false, screenshotPath };
+      logger.error("Task taking failed", { error: error.message });
+      return { success: false, method: "error" };
     }
   }
 
   async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
-      logger.info("Автозабор отключен или достигнут лимит", {
-        autoAssign: CONFIG.autoAssign,
-        tasksTaken: this.tasksTaken,
-        maxTasks: CONFIG.maxTasks,
-      });
       return false;
     }
 
-    const mainPage = this.browserManager.getPage();
-    if (!mainPage) {
-      logger.error("Основная страница не доступна");
+    if (this.processingTasks.has(taskKey)) {
+      logger.info("Задача уже в обработке", { taskKey });
       return false;
     }
+
+    this.processingTasks.add(taskKey);
 
     try {
-      logger.info("Обработка задачи", { taskKey, taskTitle });
-
-      const taskPage = await this.browserManager.openNewTab();
-      if (!taskPage) {
-        logger.error("Не удалось открыть новую вкладку");
-        return false;
-      }
-
-      try {
-        logger.info("Переход на страницу задачи", { url: taskUrl });
-        await taskPage.goto(taskUrl, {
-          waitUntil: "networkidle0",
-          timeout: 15000,
-        });
-
-        const debugScreenshotPath = await this.takeScreenshot(
-          taskPage,
-          "debug_before_click"
+      const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
+      if (success) {
+        this.tasksTaken++;
+        await this.notifier.sendText(
+          `✅ Задача взята (${method.toUpperCase()})\n${taskTitle}\nВзято: ${
+            this.tasksTaken
+          }/${CONFIG.maxTasks}`
         );
-        logger.info("Скриншот перед кликом сделан", {
-          path: debugScreenshotPath,
-        });
-
-        const { success, screenshotPath } = await this.takeTaskOnPraktikumPage(
-          taskPage
-        );
-
-        if (success) {
-          this.tasksTaken++;
-          logger.info("Задача взята в работу", {
-            taskKey,
-            tasksTaken: this.tasksTaken,
-          });
-
-          if (screenshotPath) {
-            await this.notifier.sendAlert({
-              imagePath: screenshotPath,
-              link: taskUrl,
-              caption: `✅ Задача взята в работу\n\n${taskTitle}\n\nВзято задач: ${this.tasksTaken}/${CONFIG.maxTasks}`,
-              showBoardButton: true,
-            });
-          }
-
-          this.failedAssignmentTasks.delete(taskKey);
-        } else {
-          logger.info("Не удалось взять задачу", { taskKey });
-          this.failedAssignmentTasks.add(taskKey);
-        }
-
-        return success;
-      } finally {
-        await taskPage.close();
-        await mainPage.bringToFront();
-        await sleep(1);
       }
+      return success;
     } catch (error) {
-      logger.error("Ошибка обработки задачи", {
-        error: error.message,
-        taskKey,
-      });
-      this.failedAssignmentTasks.add(taskKey);
+      logger.error("Task assignment failed", { taskKey, error: error.message });
       return false;
+    } finally {
+      this.processingTasks.delete(taskKey);
     }
   }
 
@@ -298,43 +179,13 @@ class TaskManager {
     return match ? match[1] : null;
   }
 
-  async closeModal(page) {
-    try {
-      await page.evaluate(() => {
-        const closeSelectors = [
-          'button[aria-label="Close"]',
-          ".modal-close",
-          ".close-button",
-          '[class*="close"]',
-          ".g-modal-close",
-        ];
-
-        for (const selector of closeSelectors) {
-          const element = document.querySelector(selector);
-          if (element) {
-            element.click();
-            return true;
-          }
-        }
-        return false;
-      });
-      await sleep(0.5);
-    } catch (error) {
-      logger.info("Ошибка закрытия модального окна");
-    }
-  }
-
   async getNormalTasks() {
     const page = this.browserManager.getPage();
-    if (!page) {
-      throw new Error("Страница не доступна");
-    }
+    if (!page) throw new Error("Страница не доступна");
 
     try {
       await this.browserManager.reloadPage();
       await sleep(1.5);
-
-      logger.info("Поиск секции обычных задач");
 
       const result = await page.evaluate(() => {
         const normalTasksSection = Array.from(
@@ -347,19 +198,16 @@ class TaskManager {
             el.textContent.includes("Обычные задачи")
         );
 
-        if (!normalTasksSection) {
+        if (!normalTasksSection)
           return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-        }
 
         const widget = normalTasksSection.closest(".filter-widget");
-        if (!widget) {
+        if (!widget)
           return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-        }
 
         const taskTable = widget.querySelector("table.gt-table");
-        if (!taskTable) {
+        if (!taskTable)
           return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-        }
 
         const taskRows = taskTable.querySelectorAll("tr[data-key]");
         const tasks = [];
@@ -372,24 +220,20 @@ class TaskManager {
               row.querySelector('.edit-cell__text, a[href*="/browse/"]') ||
               row.querySelector("td:nth-child(2)");
             const title = titleElement ? titleElement.textContent.trim() : key;
-
             tasks.push(key);
             taskTitles[key] = title;
           }
         });
 
-        return {
-          normalTaskKeys: tasks,
-          taskTitles: taskTitles,
-          taskCount: tasks.length,
-        };
+        return { normalTaskKeys: tasks, taskTitles, taskCount: tasks.length };
       });
 
-      logger.info("Найдены задачи", {
-        taskCount: result.normalTaskKeys.length,
-        tasks: result.normalTaskKeys,
-      });
-
+      if (result.normalTaskKeys.length > 0) {
+        logger.info("Найдены задачи", {
+          taskCount: result.normalTaskKeys.length,
+          tasks: result.normalTaskKeys,
+        });
+      }
       return result;
     } catch (error) {
       logger.error("Ошибка получения задач", { error: error.message });
@@ -414,11 +258,9 @@ class TaskManager {
           filteredTasks.push(taskKey);
           filteredTitles[taskKey] = title;
         }
-      } else {
-        if (CONFIG.sprintWhitelist.length === 0) {
-          filteredTasks.push(taskKey);
-          filteredTitles[taskKey] = title;
-        }
+      } else if (CONFIG.sprintWhitelist.length === 0) {
+        filteredTasks.push(taskKey);
+        filteredTitles[taskKey] = title;
       }
     }
 
@@ -426,29 +268,22 @@ class TaskManager {
       original: tasks.length,
       filtered: filteredTasks.length,
     });
-
     return { filteredTasks, filteredTitles };
   }
 
   async processTasks(newTasks, taskTitles, isInitial = false) {
-    if (newTasks?.length === 0) {
-      return;
-    }
+    if (!newTasks?.length) return;
 
     try {
       const mainPage = this.browserManager.getPage();
-      if (!mainPage) {
-        throw new Error("Основная страница не доступна");
-      }
+      if (!mainPage) throw new Error("Основная страница не доступна");
 
-      const tasksToProcess = [];
-      const tasksWithUrls = [];
+      const tasksToProcess = newTasks.filter(
+        (taskKey) =>
+          !this.notifiedTasks.has(taskKey) && !this.processingTasks.has(taskKey)
+      );
 
-      for (const taskKey of newTasks) {
-        tasksToProcess.push(taskKey);
-      }
-
-      if (tasksToProcess.length === 0) {
+      if (!tasksToProcess.length) {
         logger.info("Нет новых задач для обработки");
         return;
       }
@@ -457,21 +292,11 @@ class TaskManager {
         count: tasksToProcess.length,
         tasks: tasksToProcess,
       });
+      const tasksWithUrls = [];
 
       for (const taskKey of tasksToProcess) {
-        if (
-          this.notifiedTasks.has(taskKey) &&
-          !this.failedAssignmentTasks.has(taskKey)
-        ) {
-          logger.info("Задача уже уведомлена, пропускаем", { taskKey });
-          continue;
-        }
-
         const taskTitle = taskTitles[taskKey];
-
-        logger.info("Клик по задаче для открытия модального окна", {
-          taskKey,
-        });
+        logger.info("Клик по задаче для открытия модального окна", { taskKey });
 
         const taskClicked = await mainPage.evaluate((taskKey) => {
           const selectors = [
@@ -479,7 +304,6 @@ class TaskManager {
             `[data-key="${taskKey}"]`,
             `a[href*="${taskKey}"]`,
           ];
-
           for (const selector of selectors) {
             const element = document.querySelector(selector);
             if (element) {
@@ -492,9 +316,7 @@ class TaskManager {
 
         if (taskClicked) {
           await sleep(0.4);
-
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
-
           if (taskUrl) {
             tasksWithUrls.push({
               key: taskKey,
@@ -505,8 +327,6 @@ class TaskManager {
           } else {
             logger.info("Не удалось получить URL для задачи", { taskKey });
           }
-
-          await this.closeModal(mainPage);
         } else {
           logger.info("Не удалось кликнуть по задаче", { taskKey });
         }
@@ -516,7 +336,6 @@ class TaskManager {
         const tasksList = tasksWithUrls
           .map((task) => `• <a href="${task.url}">${task.title}</a>`)
           .join("\n");
-
         await this.notifier.sendText(
           `🚀 <b>${
             isInitial
@@ -528,32 +347,30 @@ class TaskManager {
         );
 
         if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-          const { filteredTasks, filteredTitles } =
-            await this.filterTasksBySprint(tasksToProcess, taskTitles);
-
-          const tasksToAssign = tasksWithUrls.filter(
-            (task) =>
-              filteredTasks.includes(task.key) ||
-              this.failedAssignmentTasks.has(task.key)
+          const { filteredTasks } = await this.filterTasksBySprint(
+            tasksToProcess,
+            taskTitles
+          );
+          const tasksToAssign = tasksWithUrls.filter((task) =>
+            filteredTasks.includes(task.key)
           );
 
           logger.info("Задачи для автозабора", {
             count: tasksToAssign.length,
             tasks: tasksToAssign.map((t) => t.key),
           });
-
           const assignedTasks = [];
 
           for (const task of tasksToAssign) {
-            if (this.tasksTaken < CONFIG.maxTasks) {
-              const assigned = await this.handleTaskAssignment(
-                task.key,
-                task.title,
-                task.url
-              );
-              if (assigned) {
-                assignedTasks.push(task.title);
-              }
+            if (this.tasksTaken >= CONFIG.maxTasks) break;
+
+            const assigned = await this.handleTaskAssignment(
+              task.key,
+              task.title,
+              task.url
+            );
+            if (assigned) {
+              assignedTasks.push(task.title);
             }
           }
 
@@ -578,49 +395,36 @@ class TaskManager {
   async recoverBrowser() {
     try {
       logger.info("Запуск восстановления браузера");
-
       const wasMonitoring = this.monitoringActive;
       this.monitoringActive = false;
 
-      if (this.browserManager) {
-        await this.browserManager.close();
-      }
-
+      if (this.browserManager) await this.browserManager.close();
       await sleep(4);
-
       await this.browserManager.init();
-
       await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-
       this.authNotificationSent = false;
 
       const isAuthenticated = await this.checkAuth();
-
       if (isAuthenticated) {
         logger.info("Браузер успешно восстановлен, авторизация подтверждена");
-
         if (wasMonitoring) {
           this.monitoringActive = true;
           setTimeout(() => this.trackTasks(), 1000);
         }
-
         return true;
       } else {
         logger.info("Браузер восстановлен, но требуется авторизация");
-
         if (wasMonitoring) {
           await this.notifier.sendText(
             "❌ Мониторинг остановлен: требуется авторизация после восстановления браузера"
           );
         }
-
         return false;
       }
     } catch (error) {
       logger.error("Критическая ошибка восстановления браузера", {
         error: error.message,
       });
-
       try {
         await this.notifier.sendText(
           "❌ Критическая ошибка восстановления браузера: " + error.message
@@ -630,7 +434,6 @@ class TaskManager {
           error: notifyError.message,
         });
       }
-
       return false;
     }
   }
@@ -639,9 +442,6 @@ class TaskManager {
     const page = this.browserManager.getPage();
     try {
       if (!page) {
-        logger.info(
-          "Страница недоступна или закрыта, требуется восстановление браузера"
-        );
         await this.recoverBrowser();
         return false;
       }
@@ -651,12 +451,10 @@ class TaskManager {
         currentUrl.includes("passport?mode=auth")
       ) {
         logger.info("Обнаружена страница авторизации по URL");
-
         if (!this.authNotificationSent) {
           await this.notifier.sendText("⚠️ Требуется авторизация в системе");
           this.authNotificationSent = true;
         }
-
         return false;
       }
 
@@ -668,26 +466,21 @@ class TaskManager {
           ".passport-AccountList",
           'a[href*="passport.yandex-team.ru"]',
         ];
-
         const hasAuthElements = authSelectors.some(
           (selector) => document.querySelector(selector) !== null
         );
-
         const hasAuthText =
           document.body.textContent.includes("Выберите аккаунт для входа") ||
           document.body.textContent.includes("Войдите в аккаунт");
-
         return hasAuthElements || hasAuthText;
       });
 
       if (isAuthRequired) {
         logger.info("Обнаружена форма авторизации");
-
         if (!this.authNotificationSent) {
           await this.notifier.sendText("⚠️ Требуется авторизация в системе");
           this.authNotificationSent = true;
         }
-
         return false;
       }
 
@@ -705,10 +498,8 @@ class TaskManager {
 
     try {
       await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-
       const isAuthenticated = await this.checkAuth();
       if (!isAuthenticated) {
-        logger.info("Ожидание аутентификации");
         await sleep(60);
         await this.recoverBrowser();
       }
@@ -716,11 +507,9 @@ class TaskManager {
       const { normalTaskKeys, taskTitles, taskCount } =
         await this.getNormalTasks();
       this.lastTaskCount = taskCount;
-
       await this.processTasks(normalTaskKeys, taskTitles, true);
 
       let prevTasks = normalTaskKeys;
-
       await this.notifier.sendText(
         `🚀 Мониторинг начат\nАвтозабор: ${
           CONFIG.autoAssign ? "✅" : "❌"
@@ -738,7 +527,7 @@ class TaskManager {
           if (currentCount !== this.lastTaskCount) {
             logger.info("Изменение количества задач", {
               previousCount: this.lastTaskCount,
-              currentCount: currentCount,
+              currentCount,
             });
             this.lastTaskCount = currentCount;
           }
@@ -746,33 +535,17 @@ class TaskManager {
           const newTasks = currentTasks.filter(
             (task) => !prevTasks.includes(task)
           );
-
-          const retryTasks = Array.from(this.failedAssignmentTasks).filter(
-            (task) => currentTasks.includes(task)
-          );
-
-          const allTasksToProcess = [...newTasks, ...retryTasks];
-
           if (newTasks.length > 0) {
-            logger.info(
-              "Обнаружены новые задачи или задачи для повторной попытки",
-              {
-                newTasks,
-                retryTasks,
-                allTasks: allTasksToProcess,
-              }
-            );
-            await this.processTasks(allTasksToProcess, currentTitles, false);
+            logger.info("Обнаружены новые задачи", { newTasks });
+            await this.processTasks(newTasks, currentTitles, false);
           }
 
           prevTasks = currentTasks;
           errorCount = 0;
-
           await sleep(2);
         } catch (error) {
           logger.error("Ошибка в цикле мониторинга", { error: error.message });
           errorCount++;
-
           if (errorCount >= maxErrors) {
             await this.notifier.sendText(
               `❌ Мониторинг остановлен из-за ${maxErrors} ошибок подряд`
@@ -781,21 +554,15 @@ class TaskManager {
               `Превышено максимальное количество ошибок (${maxErrors})`
             );
           }
-
           if (
             error.message.includes("detached") ||
             error.message.includes("PAGE_DETACHED")
           ) {
-            logger.info(
-              "Обнаружена отсоединенная страница, пытаемся восстановить"
-            );
-
             try {
               await this.browserManager.close();
               await sleep(5);
               await this.browserManager.init();
               await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-
               errorCount = 0;
               this.lastTaskCount = 0;
               continue;
@@ -805,7 +572,6 @@ class TaskManager {
               });
             }
           }
-
           await sleep(5);
         }
       }

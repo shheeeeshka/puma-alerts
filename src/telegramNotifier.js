@@ -153,12 +153,7 @@ class TelegramNotifier {
     if (!this.chatId) return;
 
     try {
-      const fullImagePath = path.join(
-        process.cwd(),
-        "..",
-        "screenshots",
-        imagePath
-      );
+      const fullImagePath = path.join(process.cwd(), "screenshots", imagePath);
 
       if (!fs.existsSync(fullImagePath)) {
         logger.warn("Файл для уведомления не найден", { path: fullImagePath });
@@ -275,14 +270,6 @@ class TelegramNotifier {
               ? "🔴 Выключить автозабор"
               : "🟢 Включить автозабор",
             callback_data: "toggle_autoassign",
-          },
-        ],
-        [
-          {
-            text: CONFIG.authRequired
-              ? "🔴 Выключить авторизацию"
-              : "🟢 Включить авторизацию",
-            callback_data: "toggle_auth",
           },
         ],
         [
