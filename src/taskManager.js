@@ -98,24 +98,26 @@ class TaskManager {
       await taskPage.bringToFront();
       await sleep(0.5);
 
-      const requests = [];
+      const allRequests = [];
+      const requestLogPath = path.join(process.cwd(), "..", "request_logs");
+
+      if (!fs.existsSync(requestLogPath)) {
+        fs.mkdirSync(requestLogPath, { recursive: true });
+      }
+
       const responseHandler = (response) => {
         const request = response.request();
-        if (
-          request.url().includes("assign") ||
-          request.url().includes("take")
-        ) {
-          requests.push({
-            url: request.url(),
-            method: request.method(),
-            headers: request.headers(),
-            postData: request.postData(),
-            response: {
-              status: response.status(),
-              headers: response.headers(),
-            },
-          });
-        }
+        allRequests.push({
+          url: request.url(),
+          method: request.method(),
+          headers: request.headers(),
+          postData: request.postData(),
+          response: {
+            status: response.status(),
+            headers: response.headers(),
+          },
+          timestamp: new Date().toISOString(),
+        });
       };
 
       taskPage.on("response", responseHandler);
@@ -125,10 +127,10 @@ class TaskManager {
           ".prisma-button2--action",
           'button[title*="Взять"]',
           'button:contains("Взять")',
-          'button[data-qa*="assign"]',
-          'button[data-qa*="take"]',
-          'button:contains("Take")',
-          'button:contains("Assign")',
+          // 'button[data-qa*="assign"]',
+          // 'button[data-qa*="take"]',
+          // 'button:contains("Take")',
+          // 'button:contains("Assign")',
         ];
 
         for (const selector of buttons) {
@@ -164,41 +166,36 @@ class TaskManager {
           return false;
         });
 
-        if (success && requests.length > 0) {
-          const requestData = requests[0];
+        taskPage.off("response", responseHandler);
+
+        if (allRequests.length > 0) {
           try {
-            const responseBody = await taskPage.evaluate((url) => {
-              return fetch(url)
-                .then((r) => r.text())
-                .catch(() => null);
-            }, requestData.url);
+            const logData = {
+              metadata: {
+                timestamp: new Date().toISOString(),
+                success: success,
+                buttonClicked: buttonClicked,
+                tasksTaken: this.tasksTaken,
+                maxTasks: CONFIG.maxTasks,
+              },
+              requests: allRequests,
+            };
 
-            requestData.response.body = responseBody;
-
-            const fs = await import("fs");
-            const path = await import("path");
-            const requestLogPath = path.join(
-              process.cwd(),
-              "..",
-              "request_logs"
-            );
-            if (!fs.existsSync(requestLogPath)) {
-              fs.mkdirSync(requestLogPath, { recursive: true });
-            }
-
-            const filename = `request_${Date.now()}.json`;
+            const filename = `requests_${Date.now()}.json`;
             const filePath = path.join(requestLogPath, filename);
-            fs.writeFileSync(filePath, JSON.stringify(requestData, null, 2));
+            fs.writeFileSync(filePath, JSON.stringify(logData, null, 2));
 
-            logger.info("Запрос сохранен", { path: filePath });
+            logger.info("Все запросы сохранены", {
+              path: filePath,
+              requestsCount: allRequests.length,
+              success: success,
+            });
           } catch (saveError) {
-            logger.error("Ошибка сохранения запроса", {
+            logger.error("Ошибка сохранения запросов", {
               error: saveError.message,
             });
           }
         }
-
-        taskPage.off("response", responseHandler);
 
         logger.info("Проверка успешности взятия задачи", { success });
         return { success: success, screenshotPath };
