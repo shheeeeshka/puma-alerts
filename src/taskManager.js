@@ -21,6 +21,8 @@ class TaskManager {
     this.screenshotsDir = path.join(process.cwd(), "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
+
+    console.log(process.cwd());
   }
 
   async ensureScreenshotsDir() {
@@ -538,7 +540,7 @@ class TaskManager {
           }
 
           const newTasks = currentTasks.filter(
-            (task) => !prevTasks.includes(task)
+            (task) => !this.notifiedTasks.includes(task)
           );
           if (newTasks.length > 0) {
             logger.info("Обнаружены новые задачи", { newTasks });
@@ -547,7 +549,7 @@ class TaskManager {
 
           prevTasks = currentTasks;
           errorCount = 0;
-          await sleep(2);
+          await sleep(4);
         } catch (error) {
           logger.error("Ошибка в цикле мониторинга", { error: error.message });
           errorCount++;
