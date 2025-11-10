@@ -1,11 +1,15 @@
 import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class HttpTaskService {
   constructor(browserManager) {
     this.browserManager = browserManager;
-    this.debugDir = path.join(process.cwd(), "debug_logs");
+    this.debugDir = path.join(__dirname, "..", "debug_logs");
   }
 
   async ensureDebugDir() {
@@ -58,11 +62,35 @@ class HttpTaskService {
     );
     logger.debug("Storage data saved", { file: debugFile });
 
-    if (!storageData.authToken || !storageData.authToken.startsWith("eyJ")) {
+    let authToken = null;
+
+    for (const [key, value] of Object.entries(storageData.sessionStorage)) {
+      if (value && typeof value === "string" && value.startsWith("eyJ")) {
+        authToken = value;
+        logger.debug("Found authToken in sessionStorage", { key });
+        break;
+      }
+    }
+
+    if (!authToken) {
+      for (const [key, value] of Object.entries(storageData.localStorage)) {
+        if (value && typeof value === "string" && value.startsWith("eyJ")) {
+          authToken = value;
+          logger.debug("Found authToken in localStorage", { key });
+          break;
+        }
+      }
+    }
+
+    if (!authToken) {
       throw new Error("Valid AuthToken not found in sessionStorage");
     }
 
-    return storageData;
+    return {
+      authToken,
+      cookies: storageData.cookies,
+      url: storageData.url,
+    };
   }
 
   async createRequestContext(taskUrl) {
@@ -88,11 +116,48 @@ class HttpTaskService {
     return { headers };
   }
 
+  async checkNetworkAvailability() {
+    const testUrls = [
+      "https://admin.praktikum.yandex-team.ru",
+      "https://ya.ru",
+      "https://google.com",
+    ];
+
+    for (const testUrl of testUrls) {
+      try {
+        logger.debug("Testing network connectivity", { url: testUrl });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(testUrl, {
+          method: "HEAD",
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.status < 400) {
+          logger.debug("Network connectivity confirmed", { url: testUrl });
+          return true;
+        }
+      } catch (error) {
+        logger.warn("Network test failed", {
+          url: testUrl,
+          error: error.message,
+        });
+      }
+    }
+
+    logger.error("All network connectivity tests failed");
+    return false;
+  }
+
   async takeTask(taskUrl) {
     let debugData = {
       taskUrl,
       timestamp: new Date().toISOString(),
       steps: [],
+      networkAvailable: null,
     };
 
     try {
@@ -100,6 +165,18 @@ class HttpTaskService {
         step: "start",
         timestamp: new Date().toISOString(),
       });
+
+      debugData.steps.push({
+        step: "network_check",
+        timestamp: new Date().toISOString(),
+      });
+
+      const networkAvailable = await this.checkNetworkAvailability();
+      if (!networkAvailable) {
+        throw new Error("Network unavailable - cannot make HTTP requests");
+      }
+
+      debugData.networkAvailable = true;
 
       const { homeworkId, secret } = this.extractTaskParams(taskUrl);
       debugData.taskParams = { homeworkId, secret };
