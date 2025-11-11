@@ -18,7 +18,7 @@ class TaskManager {
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(__dirname, "..", "screenshots");
+    this.screenshotsDir = path.join(__dirname, "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
   }
@@ -288,8 +288,6 @@ class TaskManager {
           !this.notifiedTasks.has(taskKey) && !this.processingTasks.has(taskKey)
       );
 
-      console.log({ tasksToProcess });
-
       if (!tasksToProcess.length) {
         logger.info("Нет новых задач для обработки");
         return;
@@ -543,10 +541,7 @@ class TaskManager {
             (task) => !this.notifiedTasks.has(task)
           );
           if (newTasks.length > 0) {
-            logger.info(
-              `Обнаружены новые задачи\n\n${JSON.stringify(newTasks)}`,
-              { newTasks }
-            );
+            logger.info("Обнаружены новые задачи", { newTasks });
             await this.processTasks(newTasks, currentTitles, false);
           }
 

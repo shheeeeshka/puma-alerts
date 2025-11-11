@@ -1,600 +1,516 @@
-import { sleep, checkSprintWhitelist } from "./utils.js";
-import CONFIG from "./config.js";
-import logger from "./logger.js";
+import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import HttpTaskService from "./httpTaskService.js";
+import logger from "./logger.js";
+import { restartMonitoring } from "./index.js";
+import CONFIG from "./config.js";
+import mailService from "./mailService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-class TaskManager {
-  constructor(browserManager, notifier) {
-    this.browserManager = browserManager;
-    this.notifier = notifier;
-    this.httpTaskService = new HttpTaskService(browserManager);
-    this.tasksTaken = 0;
-    this.monitoringActive = false;
-    this.lastTaskCount = 0;
-    this.authNotificationSent = false;
-    this.screenshotsDir = path.join(__dirname, "screenshots");
-    this.notifiedTasks = new Set();
-    this.processingTasks = new Set();
-  }
-
-  async ensureScreenshotsDir() {
-    if (!fs.existsSync(this.screenshotsDir)) {
-      fs.mkdirSync(this.screenshotsDir, { recursive: true });
+class TelegramNotifier {
+  constructor({ botToken, chatId }) {
+    if (!botToken) {
+      throw new Error("Требуется botToken");
     }
+    this.botToken = botToken;
+    this.chatId = chatId;
+    this.apiUrl = `https://api.telegram.org/bot${this.botToken}`;
+    this.pollingInterval = null;
+    this.lastMessageId = null;
+    this.waitingForInput = null;
+    this.configMenuMessageId = null;
   }
 
-  async takeScreenshot(page, name) {
-    try {
-      await this.ensureScreenshotsDir();
-      const filename = `${name}_${Date.now()}.png`;
-      const screenshotPath = path.join(this.screenshotsDir, filename);
-      await page.screenshot({ path: screenshotPath, type: "png" });
-      logger.info("Скриншот сделан", { path: screenshotPath });
-      return filename;
-    } catch (error) {
-      logger.error("Не удалось сделать скриншот", { error: error.message });
-      return null;
-    }
-  }
+  async startPolling() {
+    logger.info("Запуск long polling для обработки callback-ов");
+    let offset = 0;
 
-  async startMonitoring() {
-    this.monitoringActive = true;
-    this.tasksTaken = 0;
-    this.authNotificationSent = false;
-    this.notifiedTasks.clear();
-    this.processingTasks.clear();
-    logger.info("Запуск мониторинга задач");
-    await this.trackTasks();
-  }
+    this.pollingInterval = setInterval(async () => {
+      try {
+        const response = await axios.get(`${this.apiUrl}/getUpdates`, {
+          params: {
+            offset,
+            timeout: 10,
+            allowed_updates: ["message", "callback_query"],
+          },
+        });
 
-  async stopMonitoring() {
-    this.monitoringActive = false;
-    logger.info("Остановка мониторинга");
-  }
+        const updates = response.data.result;
 
-  async extractTaskUrlFromModal(page) {
-    try {
-      await page.waitForSelector('a[href*="praktikum-admin.yandex-team.ru"]', {
-        timeout: 5000,
-      });
-      const url = await page.evaluate(() => {
-        const linkElement = document.querySelector(
-          'a[href*="praktikum-admin.yandex-team.ru"]'
-        );
-        return linkElement ? linkElement.href : null;
-      });
-      if (url) {
-        logger.info({ url }, "Найдена ссылка на задачу в модальном окне");
-        return url;
+        for (const update of updates) {
+          if (update.message) {
+            await this.handleMessage(update.message);
+          }
+
+          if (update.callback_query) {
+            await this.handleCallback(update.callback_query);
+          }
+
+          offset = update.update_id + 1;
+        }
+      } catch (error) {
+        if (error.response?.status !== 409) {
+          logger.error("Ошибка long polling", { error: error.message });
+        }
       }
-      return null;
+    }, 1000);
+  }
+
+  stopPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  async deleteMessage(messageId) {
+    try {
+      await axios.post(`${this.apiUrl}/deleteMessage`, {
+        chat_id: this.chatId,
+        message_id: messageId,
+      });
     } catch (error) {
-      logger.error("Ошибка извлечения URL из модального окна", {
+      logger.debug("Не удалось удалить сообщение", { error: error.message });
+    }
+  }
+
+  async editMessage(messageId, text, keyboard = null) {
+    try {
+      const data = {
+        chat_id: this.chatId,
+        message_id: messageId,
+        text: text,
+        parse_mode: "HTML",
+      };
+
+      if (keyboard) {
+        data.reply_markup = keyboard;
+      }
+
+      await axios.post(`${this.apiUrl}/editMessageText`, data);
+    } catch (error) {
+      logger.error("Ошибка редактирования сообщения", { error: error.message });
+    }
+  }
+
+  async sendText(message, keyboard = null, isConfigMenu = false) {
+    if (!this.chatId) {
+      logger.warn("chatId не задан, пропускаем отправку сообщения");
+      return;
+    }
+
+    try {
+      if (this.lastMessageId && this.waitingForInput) {
+        await this.deleteMessage(this.lastMessageId);
+        this.waitingForInput = null;
+      }
+
+      const data = {
+        chat_id: this.chatId,
+        text: message,
+        parse_mode: "HTML",
+      };
+
+      if (keyboard) {
+        data.reply_markup = keyboard;
+      }
+
+      const response = await axios.post(`${this.apiUrl}/sendMessage`, data);
+      this.lastMessageId = response.data.result.message_id;
+
+      if (isConfigMenu) {
+        this.configMenuMessageId = this.lastMessageId;
+      }
+
+      logger.debug("Сообщение отправлено в Telegram");
+      return response.data;
+    } catch (error) {
+      logger.error("Ошибка отправки сообщения в Telegram", {
         error: error.message,
       });
-      return null;
-    }
-  }
 
-  async takeTaskOnPraktikumPage(taskUrl) {
-    try {
-      const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
-      if (httpSuccess) {
-        logger.info("Task taken successfully via HTTP");
-        return { success: true, method: "http" };
-      }
-
-      logger.info("Falling back to UI method");
-      const taskPage = await this.browserManager.openNewTab();
       try {
-        await taskPage.goto(taskUrl, {
-          waitUntil: "networkidle0",
-          timeout: 15000,
+        await mailService.sendAlertMail(
+          "",
+          "",
+          `Telegram Error: ${message.substring(0, 100)}`
+        );
+        logger.info("Отправлено уведомление по почте из-за ошибки Telegram");
+      } catch (mailError) {
+        logger.error("Не удалось отправить уведомление по почте", {
+          error: mailError.message,
         });
-        const buttonClicked = await taskPage.evaluate(() => {
-          const selectors = [
-            ".review-header__button-take",
-            ".prisma-button2_view_primary",
-            'button:contains("Взять")',
-          ];
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element?.offsetParent && !element.disabled) {
-              element.click();
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (buttonClicked) {
-          await sleep(1.2);
-          await taskPage.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight);
-          });
-          await sleep(1.5);
-          const success = await taskPage.evaluate(() => {
-            const hasTimer = document
-              .querySelector(".review-header__review-status_status_reviewing")
-              ?.textContent?.includes("Таймер SLA");
-            const reviewFooter = document.querySelector(".review-footer");
-            const hasButtons =
-              reviewFooter &&
-              reviewFooter.querySelector(
-                'button[class*="review-footer-action_type_fill-rubricator"]'
-              ) &&
-              reviewFooter.querySelector(
-                'button[class*="review-footer-action_type_fail"]'
-              );
-
-            return hasTimer && hasButtons;
-          });
-          await this.takeScreenshot(taskPage, "assign_attempt");
-          return { success, method: "ui" };
-        }
-        return { success: false, method: "ui" };
-      } finally {
-        await taskPage.close();
       }
-    } catch (error) {
-      logger.error("Task taking failed", { error: error.message });
-      return { success: false, method: "error" };
+
+      throw error;
     }
   }
 
-  async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
-    if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
-      return false;
-    }
-
-    if (this.processingTasks.has(taskKey)) {
-      logger.info("Задача уже в обработке", { taskKey });
-      return false;
-    }
-
-    this.processingTasks.add(taskKey);
+  async sendAlert({ imagePath, link, caption = "", showBoardButton = false }) {
+    if (!this.chatId) return;
 
     try {
-      const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
-      if (success) {
-        this.tasksTaken++;
-        await this.notifier.sendText(
-          `✅ Задача взята (${method.toUpperCase()})\n${taskTitle}\nВзято: ${
-            this.tasksTaken
-          }/${CONFIG.maxTasks}`
-        );
-      }
-      return success;
-    } catch (error) {
-      logger.error("Task assignment failed", { taskKey, error: error.message });
-      return false;
-    } finally {
-      this.processingTasks.delete(taskKey);
-    }
-  }
-
-  extractSprintNumber(taskTitle) {
-    const match = taskTitle.match(/\[(\d+)\]/);
-    return match ? match[1] : null;
-  }
-
-  async getNormalTasks() {
-    const page = this.browserManager.getPage();
-    if (!page) throw new Error("Страница не доступна");
-
-    try {
-      await this.browserManager.reloadPage();
-      await sleep(1.5);
-
-      const result = await page.evaluate(() => {
-        const normalTasksSection = Array.from(
-          document.querySelectorAll(
-            ".collapse-widget-header__title-item_primary"
-          )
-        ).find(
-          (el) =>
-            el.textContent.includes("💨") &&
-            el.textContent.includes("Обычные задачи")
-        );
-
-        if (!normalTasksSection)
-          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-
-        const widget = normalTasksSection.closest(".filter-widget");
-        if (!widget)
-          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-
-        const taskTable = widget.querySelector("table.gt-table");
-        if (!taskTable)
-          return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-
-        const taskRows = taskTable.querySelectorAll("tr[data-key]");
-        const tasks = [];
-        const taskTitles = {};
-
-        taskRows.forEach((row) => {
-          const key = row.getAttribute("data-key");
-          if (key && key.startsWith("PCR-")) {
-            const titleElement =
-              row.querySelector('.edit-cell__text, a[href*="/browse/"]') ||
-              row.querySelector("td:nth-child(2)");
-            const title = titleElement ? titleElement.textContent.trim() : key;
-            tasks.push(key);
-            taskTitles[key] = title;
-          }
-        });
-
-        return { normalTaskKeys: tasks, taskTitles, taskCount: tasks.length };
-      });
-
-      if (result.normalTaskKeys.length > 0) {
-        logger.info("Найдены задачи", {
-          taskCount: result.normalTaskKeys.length,
-          tasks: result.normalTaskKeys,
-        });
-      }
-      return result;
-    } catch (error) {
-      logger.error("Ошибка получения задач", { error: error.message });
-      return { normalTaskKeys: [], taskTitles: {}, taskCount: 0 };
-    }
-  }
-
-  async filterTasksBySprint(tasks, taskTitles) {
-    const filteredTasks = [];
-    const filteredTitles = {};
-
-    for (const taskKey of tasks) {
-      const title = taskTitles[taskKey];
-      const hasSprintBrackets = /\[\d+\]/.test(title);
-
-      if (hasSprintBrackets) {
-        const shouldProcess = checkSprintWhitelist(
-          title,
-          CONFIG.sprintWhitelist
-        );
-        if (shouldProcess) {
-          filteredTasks.push(taskKey);
-          filteredTitles[taskKey] = title;
-        }
-      } else if (CONFIG.sprintWhitelist.length === 0) {
-        filteredTasks.push(taskKey);
-        filteredTitles[taskKey] = title;
-      }
-    }
-
-    logger.info("Задачи отфильтрованы по спринтам", {
-      original: tasks.length,
-      filtered: filteredTasks.length,
-    });
-    return { filteredTasks, filteredTitles };
-  }
-
-  async processTasks(newTasks, taskTitles, isInitial = false) {
-    if (!newTasks?.length) return;
-
-    try {
-      const mainPage = this.browserManager.getPage();
-      if (!mainPage) throw new Error("Основная страница не доступна");
-
-      const tasksToProcess = newTasks.filter(
-        (taskKey) =>
-          !this.notifiedTasks.has(taskKey) && !this.processingTasks.has(taskKey)
+      const fullImagePath = path.join(
+        __dirname,
+        "..",
+        "screenshots",
+        imagePath
       );
 
-      if (!tasksToProcess.length) {
-        logger.info("Нет новых задач для обработки");
+      if (!fs.existsSync(fullImagePath)) {
+        logger.warn("Файл для уведомления не найден", { path: fullImagePath });
+        await this.sendText(`⚠️ Не удалось найти скриншот\n\n${caption}`);
         return;
       }
 
-      logger.info("Обработка новых задач", {
-        count: tasksToProcess.length,
-        tasks: tasksToProcess,
-      });
-      const tasksWithUrls = [];
+      const FormData = (await import("form-data")).default;
+      const formData = new FormData();
+      formData.append("chat_id", this.chatId);
+      formData.append("photo", fs.createReadStream(fullImagePath));
+      formData.append("caption", caption);
+      formData.append("parse_mode", "HTML");
 
-      for (const taskKey of tasksToProcess) {
-        const taskTitle = taskTitles[taskKey];
-        logger.info("Клик по задаче для открытия модального окна", { taskKey });
-
-        const taskClicked = await mainPage.evaluate((taskKey) => {
-          const selectors = [
-            `tr[data-key="${taskKey}"]`,
-            `[data-key="${taskKey}"]`,
-            `a[href*="${taskKey}"]`,
-          ];
-          for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element) {
-              element.click();
-              return true;
-            }
-          }
-          return false;
-        }, taskKey);
-
-        if (taskClicked) {
-          await sleep(0.4);
-          const taskUrl = await this.extractTaskUrlFromModal(mainPage);
-          if (taskUrl) {
-            tasksWithUrls.push({
-              key: taskKey,
-              title: taskTitle,
-              url: taskUrl,
-            });
-            this.notifiedTasks.add(taskKey);
-          } else {
-            logger.info("Не удалось получить URL для задачи", { taskKey });
-          }
-        } else {
-          logger.info("Не удалось кликнуть по задаче", { taskKey });
-        }
-      }
-
-      if (tasksWithUrls.length > 0) {
-        const tasksList = tasksWithUrls
-          .map((task) => `• <a href="${task.url}">${task.title}</a>`)
-          .join("\n");
-        await this.notifier.sendText(
-          `🚀 <b>${
-            isInitial
-              ? "Обнаружены задачи при запуске!"
-              : "Обнаружены новые задачи!"
-          }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-            CONFIG.maxTasks
-          }`
+      if (showBoardButton) {
+        formData.append(
+          "reply_markup",
+          JSON.stringify({
+            inline_keyboard: [[{ text: "📋 Открыть доску", url: link }]],
+          })
         );
-
-        if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-          const { filteredTasks } = await this.filterTasksBySprint(
-            tasksToProcess,
-            taskTitles
-          );
-          const tasksToAssign = tasksWithUrls.filter((task) =>
-            filteredTasks.includes(task.key)
-          );
-
-          logger.info("Задачи для автозабора", {
-            count: tasksToAssign.length,
-            tasks: tasksToAssign.map((t) => t.key),
-          });
-          const assignedTasks = [];
-
-          for (const task of tasksToAssign) {
-            if (this.tasksTaken >= CONFIG.maxTasks) break;
-
-            const assigned = await this.handleTaskAssignment(
-              task.key,
-              task.title,
-              task.url
-            );
-            if (assigned) {
-              assignedTasks.push(task.title);
-            }
-          }
-
-          if (assignedTasks.length > 0) {
-            await this.notifier.sendText(
-              `✅ Удалось взять в работу ${
-                assignedTasks.length
-              } задач:\n${assignedTasks
-                .map((task) => `• ${task}`)
-                .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
-                CONFIG.maxTasks
-              }`
-            );
-          }
-        }
       }
+
+      await axios.post(`${this.apiUrl}/sendPhoto`, formData, {
+        headers: formData.getHeaders(),
+      });
+
+      logger.debug("Уведомление с изображением отправлено");
     } catch (error) {
-      logger.error("Ошибка обработки задач", { error: error.message });
-    }
-  }
-
-  async recoverBrowser() {
-    try {
-      logger.info("Запуск восстановления браузера");
-      const wasMonitoring = this.monitoringActive;
-      this.monitoringActive = false;
-
-      if (this.browserManager) await this.browserManager.close();
-      await sleep(4);
-      await this.browserManager.init();
-      await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-      this.authNotificationSent = false;
-
-      const isAuthenticated = await this.checkAuth();
-      if (isAuthenticated) {
-        logger.info("Браузер успешно восстановлен, авторизация подтверждена");
-        if (wasMonitoring) {
-          this.monitoringActive = true;
-          setTimeout(() => this.trackTasks(), 1000);
-        }
-        return true;
-      } else {
-        logger.info("Браузер восстановлен, но требуется авторизация");
-        if (wasMonitoring) {
-          await this.notifier.sendText(
-            "❌ Мониторинг остановлен: требуется авторизация после восстановления браузера"
-          );
-        }
-        return false;
-      }
-    } catch (error) {
-      logger.error("Критическая ошибка восстановления браузера", {
+      logger.error("Ошибка отправки уведомления с изображением", {
         error: error.message,
       });
+
       try {
-        await this.notifier.sendText(
-          "❌ Критическая ошибка восстановления браузера: " + error.message
+        await mailService.sendAlertMail("", link, `Alert Error: ${caption}`);
+        logger.info(
+          "Отправлено уведомление по почте из-за ошибки Telegram с изображением"
         );
-      } catch (notifyError) {
-        logger.error("Не удалось отправить уведомление об ошибке", {
-          error: notifyError.message,
+      } catch (mailError) {
+        logger.error("Не удалось отправить уведомление по почте", {
+          error: mailError.message,
         });
       }
-      return false;
+
+      throw error;
     }
   }
 
-  async checkAuth() {
-    const page = this.browserManager.getPage();
-    try {
-      if (!page) {
-        await this.recoverBrowser();
-        return false;
-      }
-      const currentUrl = await page.url();
-      if (
-        currentUrl.includes("passport.yandex-team.ru") ||
-        currentUrl.includes("passport?mode=auth")
-      ) {
-        logger.info("Обнаружена страница авторизации по URL");
-        if (!this.authNotificationSent) {
-          await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-          this.authNotificationSent = true;
-        }
-        return false;
-      }
+  async sendDoubleAlert({
+    taskImagePath,
+    boardImagePath,
+    link,
+    tasksTaken,
+    maxTasks,
+    message = "",
+  }) {
+    if (!this.chatId) return;
 
-      const isAuthRequired = await page.evaluate(() => {
-        const authSelectors = [
-          'input[type="password"]',
-          'input[name="password"]',
-          ".passport-Domik",
-          ".passport-AccountList",
-          'a[href*="passport.yandex-team.ru"]',
-        ];
-        const hasAuthElements = authSelectors.some(
-          (selector) => document.querySelector(selector) !== null
-        );
-        const hasAuthText =
-          document.body.textContent.includes("Выберите аккаунт для входа") ||
-          document.body.textContent.includes("Войдите в аккаунт");
-        return hasAuthElements || hasAuthText;
+    try {
+      const FormData = (await import("form-data")).default;
+      const formData = new FormData();
+
+      const media = [
+        {
+          type: "photo",
+          media: `attach://task_photo`,
+          caption: message,
+          parse_mode: "HTML",
+        },
+        {
+          type: "photo",
+          media: `attach://board_photo`,
+        },
+      ];
+
+      formData.append("chat_id", this.chatId);
+      formData.append("media", JSON.stringify(media));
+      formData.append(
+        "reply_markup",
+        JSON.stringify({
+          inline_keyboard: [[{ text: "📋 Открыть задачу", url: link }]],
+        })
+      );
+
+      formData.append(
+        "task_photo",
+        fs.createReadStream(path.join(__dirname, taskImagePath))
+      );
+      formData.append(
+        "board_photo",
+        fs.createReadStream(path.join(__dirname, boardImagePath))
+      );
+
+      await axios.post(`${this.apiUrl}/sendMediaGroup`, formData, {
+        headers: formData.getHeaders(),
       });
 
-      if (isAuthRequired) {
-        logger.info("Обнаружена форма авторизации");
-        if (!this.authNotificationSent) {
-          await this.notifier.sendText("⚠️ Требуется авторизация в системе");
-          this.authNotificationSent = true;
-        }
-        return false;
-      }
-
-      this.authNotificationSent = false;
-      return true;
+      logger.debug("Двойное уведомление отправлено");
     } catch (error) {
-      logger.error("Ошибка проверки авторизации", { error: error.message });
-      return false;
+      logger.error("Ошибка отправки двойного уведомления", {
+        error: error.message,
+      });
+      throw error;
     }
   }
 
-  async trackTasks() {
-    let errorCount = 0;
-    const maxErrors = 10;
+  async sendConfigMenu() {
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: "📊 Текущая конфигурация", callback_data: "show_config" }],
+        [
+          {
+            text: CONFIG.autoAssign
+              ? "🔴 Выключить автозабор"
+              : "🟢 Включить автозабор",
+            callback_data: "toggle_autoassign",
+          },
+        ],
+        [
+          {
+            text: "🎯 Лимит задач: " + CONFIG.maxTasks,
+            callback_data: "change_max_tasks",
+          },
+        ],
+        [{ text: "📋 Вайтлист спринтов", callback_data: "change_whitelist" }],
+        [{ text: "🌐 URL доски", callback_data: "change_target_url" }],
+        [
+          {
+            text: "🔄 Перезапустить мониторинг",
+            callback_data: "restart_monitoring",
+          },
+        ],
+      ],
+    };
 
+    await this.sendText(
+      "⚙️ <b>Панель управления мониторингом</b>\n\nВыберите действие:",
+      keyboard,
+      true
+    );
+  }
+
+  async handleCallback(query) {
     try {
-      await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-      const isAuthenticated = await this.checkAuth();
-      if (!isAuthenticated) {
-        await sleep(60);
-        await this.recoverBrowser();
-      }
+      const { data, id, message } = query;
 
-      const { normalTaskKeys, taskTitles, taskCount } =
-        await this.getNormalTasks();
-      this.lastTaskCount = taskCount;
-      await this.processTasks(normalTaskKeys, taskTitles, true);
+      switch (data) {
+        case "show_config":
+          const configText =
+            `📋 <b>Текущая конфигурация:</b>\n\n` +
+            `🔄 Автозабор задач: ${
+              CONFIG.autoAssign ? "✅ Включен" : "❌ Выключен"
+            }\n` +
+            `🔐 Авторизация: ${
+              CONFIG.authRequired ? "✅ Включена" : "❌ Выключена"
+            }\n` +
+            `🎯 Лимит задач: ${CONFIG.maxTasks}\n` +
+            `📋 Вайтлист спринтов: ${
+              CONFIG.sprintWhitelist.join(", ") || "не задан"
+            }\n` +
+            `🌐 URL доски: ${CONFIG.targetBoardUrl}`;
 
-      let prevTasks = normalTaskKeys;
-      await this.notifier.sendText(
-        `🚀 Мониторинг начат\nАвтозабор: ${
-          CONFIG.autoAssign ? "✅" : "❌"
-        }\nЛимит задач: ${CONFIG.maxTasks}\nЗадач в секции: ${taskCount}`
-      );
+          await this.editMessage(message.message_id, configText);
+          break;
 
-      while (this.monitoringActive) {
-        try {
-          const {
-            normalTaskKeys: currentTasks,
-            taskTitles: currentTitles,
-            taskCount: currentCount,
-          } = await this.getNormalTasks();
-
-          if (currentCount !== this.lastTaskCount) {
-            logger.info("Изменение количества задач", {
-              previousCount: this.lastTaskCount,
-              currentCount,
-            });
-            this.lastTaskCount = currentCount;
-          }
-
-          const newTasks = currentTasks.filter(
-            (task) => !this.notifiedTasks.has(task)
+        case "toggle_autoassign":
+          CONFIG.autoAssign = !CONFIG.autoAssign;
+          process.env.AUTO_ASSIGN = CONFIG.autoAssign ? "1" : "0";
+          await this.editMessage(
+            message.message_id,
+            `Автозабор задач ${
+              CONFIG.autoAssign ? "✅ включен" : "❌ выключен"
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
           );
-          if (newTasks.length > 0) {
-            logger.info("Обнаружены новые задачи", { newTasks });
-            await this.processTasks(newTasks, currentTitles, false);
-          }
+          await this.sendConfigMenu();
+          break;
 
-          prevTasks = currentTasks;
-          errorCount = 0;
-          await sleep(4);
-        } catch (error) {
-          logger.error("Ошибка в цикле мониторинга", { error: error.message });
-          errorCount++;
-          if (errorCount >= maxErrors) {
-            await this.notifier.sendText(
-              `❌ Мониторинг остановлен из-за ${maxErrors} ошибок подряд`
-            );
-            throw new Error(
-              `Превышено максимальное количество ошибок (${maxErrors})`
-            );
-          }
-          if (
-            error.message.includes("detached") ||
-            error.message.includes("PAGE_DETACHED")
-          ) {
-            try {
-              await this.browserManager.close();
-              await sleep(5);
-              await this.browserManager.init();
-              await this.browserManager.navigateTo(CONFIG.targetBoardUrl);
-              errorCount = 0;
-              this.lastTaskCount = 0;
-              continue;
-            } catch (recoveryError) {
-              logger.error("Ошибка восстановления браузера", {
-                error: recoveryError.message,
-              });
-            }
-          }
-          await sleep(5);
-        }
+        case "toggle_auth":
+          CONFIG.authRequired = !CONFIG.authRequired;
+          process.env.AUTH = CONFIG.authRequired ? "1" : "0";
+          await this.editMessage(
+            message.message_id,
+            `Авторизация ${
+              CONFIG.authRequired ? "✅ включена" : "❌ выключена"
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
+          );
+          await this.sendConfigMenu();
+          break;
+
+        case "change_max_tasks":
+          this.waitingForInput = "max_tasks";
+          await this.sendText("Введите новое значение лимита задач (число):");
+          break;
+
+        case "change_whitelist":
+          this.waitingForInput = "whitelist";
+          await this.sendText(
+            "Введите номера спринтов через запятую (например: 19,10):"
+          );
+          break;
+
+        case "change_target_url":
+          this.waitingForInput = "target_url";
+          await this.sendText("Введите новый URL доски:");
+          break;
+
+        case "restart_monitoring":
+          await this.editMessage(
+            message.message_id,
+            "🔄 Перезапуск мониторинга..."
+          );
+          await restartMonitoring();
+          break;
+
+        default:
+          await this.sendText("❌ Неизвестная команда");
       }
+
+      await axios.post(`${this.apiUrl}/answerCallbackQuery`, {
+        callback_query_id: id,
+        text: "Команда выполнена",
+      });
     } catch (error) {
-      logger.error("Критическая ошибка мониторинга", { error: error.message });
-      await this.notifier.sendText(
-        `❌ Мониторинг остановлен: ${error.message}`
-      );
+      logger.error("Ошибка обработки callback", { error: error.message });
     }
   }
 
-  getTasksTaken() {
-    return this.tasksTaken;
+  async handleMessage(message) {
+    if (!message.text) return;
+
+    const text = message.text.trim();
+
+    if (this.waitingForInput) {
+      switch (this.waitingForInput) {
+        case "max_tasks":
+          if (text.match(/^\d+$/)) {
+            CONFIG.maxTasks = parseInt(text);
+            process.env.MAX_TASKS = text;
+            await this.sendText(
+              `✅ Лимит задач изменен на: ${text}\n\nДля применения изменений требуется перезапуск мониторинга.`
+            );
+            await this.sendConfigMenu();
+          } else {
+            await this.sendText("❌ Введите корректное число");
+          }
+          this.waitingForInput = null;
+          return;
+
+        case "whitelist":
+          CONFIG.sprintWhitelist = text
+            ? text.split(",").map((s) => s.trim())
+            : [];
+          process.env.SPRINT_WHITELIST = CONFIG.sprintWhitelist.join(",");
+          await this.sendText(
+            `✅ Вайтлист спринтов изменен: ${
+              CONFIG.sprintWhitelist.join(", ") || "очищен"
+            }\n\nДля применения изменений требуется перезапуск мониторинга.`
+          );
+          await this.sendConfigMenu();
+          this.waitingForInput = null;
+          return;
+
+        case "target_url":
+          if (text.startsWith("http")) {
+            CONFIG.targetBoardUrl = text;
+            process.env.TARGET_BOARD_URL = text;
+            await this.sendText(
+              `✅ URL доски изменен на: ${text}\n\nДля применения изменений требуется перезапуск мониторинга.`
+            );
+            await this.sendConfigMenu();
+          } else {
+            await this.sendText("❌ Введите корректный URL");
+          }
+          this.waitingForInput = null;
+          return;
+      }
+    }
+
+    if (text === "/config") {
+      await this.sendConfigMenu();
+      return;
+    }
+
+    if (text === "/start") {
+      const keyboard = {
+        keyboard: [[{ text: "⚙️ Панель управления" }]],
+        resize_keyboard: true,
+        one_time_keyboard: false,
+      };
+
+      await this.sendText(
+        "👋 <b>Добро пожаловать!</b>\n\nНажмите кнопку ниже для управления настройками мониторинга.",
+        keyboard
+      );
+      return;
+    }
+
+    if (text === "⚙️ Панель управления") {
+      await this.sendConfigMenu();
+      return;
+    }
+
+    if (text === "/restart") {
+      await this.sendText("🔄 Перезапуск мониторинга...");
+      await restartMonitoring();
+      return;
+    }
   }
 
-  isMonitoringActive() {
-    return this.monitoringActive;
+  async listenForChatId() {
+    logger.info("Ожидание сообщения для получения chatId");
+    let offset = 0;
+
+    while (true) {
+      try {
+        const response = await axios.get(`${this.apiUrl}/getUpdates`, {
+          params: { offset, timeout: 30 },
+        });
+        const updates = response.data.result;
+
+        for (const update of updates) {
+          if (update.message && update.message.chat && update.message.chat.id) {
+            const chatId = update.message.chat.id;
+            this.chatId = chatId;
+
+            const keyboard = {
+              keyboard: [[{ text: "⚙️ Панель управления" }]],
+              resize_keyboard: true,
+              one_time_keyboard: false,
+            };
+
+            await this.sendText(
+              `👋 <b>Добро пожаловать!</b>\n\nВаш chatId: <code>${chatId}</code>\n\nЗапишите его в переменную окружения TELEGRAM_CHAT_ID`,
+              keyboard
+            );
+            return chatId;
+          }
+
+          if (update.callback_query) {
+            await this.handleCallback(update.callback_query);
+          }
+        }
+
+        if (updates.length > 0) {
+          offset = updates[updates.length - 1].update_id + 1;
+        }
+      } catch (err) {
+        logger.error("Ошибка получения chatId", { error: err.message });
+      }
+      await new Promise((res) => setTimeout(res, 1000));
+    }
   }
 }
 
-export default TaskManager;
+export default TelegramNotifier;
