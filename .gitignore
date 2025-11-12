@@ -1,4 +1,5 @@
 /node_modules
 /tmp
 /screenshots
-.envdebug_logs/
+.env
+debug_logs/
