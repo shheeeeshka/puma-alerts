@@ -18,7 +18,7 @@ class TaskManager {
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(__dirname, "screenshots");
+    this.screenshotsDir = path.join(__dirname, "..", "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
   }
@@ -84,19 +84,21 @@ class TaskManager {
 
   async takeTaskOnPraktikumPage(taskUrl) {
     try {
-      const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
-      if (httpSuccess) {
-        logger.info("Task taken successfully via HTTP");
-        return { success: true, method: "http" };
-      }
-
-      logger.info("Falling back to UI method");
       const taskPage = await this.browserManager.openNewTab();
       try {
         await taskPage.goto(taskUrl, {
           waitUntil: "networkidle0",
           timeout: 15000,
         });
+
+        const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
+        if (httpSuccess) {
+          logger.info("Task taken successfully via HTTP");
+          return { success: true, method: "http" };
+        }
+
+        logger.info("Falling back to UI method");
+
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
             ".review-header__button-take",

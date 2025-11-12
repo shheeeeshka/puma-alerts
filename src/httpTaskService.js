@@ -34,7 +34,7 @@ class HttpTaskService {
   }
 
   async getAuthData() {
-    const page = this.browserManager.getPage();
+    // const page = this.browserManager.getPage();
     if (!page) throw new Error("Page unavailable");
 
     const storageData = await page.evaluate(() => {

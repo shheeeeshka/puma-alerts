@@ -1,0 +1,25 @@
+{
+  "taskUrl": "https://praktikum-admin.yandex-team.ru/office/revisor-review/1770737/e4feccff2c3e4b13bb3eb09888f8d11c",
+  "timestamp": "2025-11-11T16:06:51.498Z",
+  "steps": [
+    {
+      "step": "start",
+      "timestamp": "2025-11-11T16:06:51.498Z"
+    },
+    {
+      "step": "network_check",
+      "timestamp": "2025-11-11T16:06:51.498Z"
+    },
+    {
+      "step": "error",
+      "timestamp": "2025-11-11T16:06:51.651Z",
+      "error": "Valid AuthToken not found in sessionStorage"
+    }
+  ],
+  "networkAvailable": true,
+  "taskParams": {
+    "homeworkId": "1770737",
+    "secret": "e4feccff2c3e4b13bb3eb09888f8d11c"
+  },
+  "error": "Valid AuthToken not found in sessionStorage"
+}
