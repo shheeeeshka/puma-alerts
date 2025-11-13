@@ -164,6 +164,7 @@ class TaskManager {
 
     try {
       const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
+      console.log({ success, method });
       if (success) {
         this.tasksTaken++;
         await this.notifier.sendText(

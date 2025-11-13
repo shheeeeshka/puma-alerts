@@ -37,6 +37,12 @@ class HttpTaskService {
     const page = this.browserManager.getPage();
     if (!page) throw new Error("Page unavailable");
 
+    const currentUrl = await page.url();
+    await page.goto("https://admin.praktikum.yandex-team.ru", {
+      waitUntil: "domcontentloaded",
+      timeout: 10000,
+    });
+
     const storageData = await page.evaluate(() => {
       const getStorageData = (storage) => {
         const data = {};
@@ -54,6 +60,11 @@ class HttpTaskService {
         url: window.location.href,
         userAgent: navigator.userAgent,
       };
+    });
+
+    await page.goto(currentUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 10000,
     });
 
     const debugFile = await this.saveDebugData(
