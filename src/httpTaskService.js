@@ -38,10 +38,13 @@ class HttpTaskService {
     if (!page) throw new Error("Page unavailable");
 
     const currentUrl = await page.url();
-    await page.goto("https://admin.praktikum.yandex-team.ru", {
+
+    await page.goto("https://praktikum-admin.yandex-team.ru", {
       waitUntil: "domcontentloaded",
       timeout: 10000,
     });
+
+    await sleep(2);
 
     const storageData = await page.evaluate(() => {
       const getStorageData = (storage) => {
@@ -73,15 +76,7 @@ class HttpTaskService {
     );
     logger.debug("Storage data saved", { file: debugFile });
 
-    let authToken = null;
-
-    for (const [key, value] of Object.entries(storageData.sessionStorage)) {
-      if (value && typeof value === "string" && value.startsWith("eyJ")) {
-        authToken = value;
-        logger.debug("Found authToken in sessionStorage", { key });
-        break;
-      }
-    }
+    let authToken = storageData.localStorage["AUTH_TOKEN"];
 
     if (!authToken) {
       for (const [key, value] of Object.entries(storageData.localStorage)) {
@@ -94,7 +89,17 @@ class HttpTaskService {
     }
 
     if (!authToken) {
-      throw new Error("Valid AuthToken not found in sessionStorage");
+      for (const [key, value] of Object.entries(storageData.sessionStorage)) {
+        if (value && typeof value === "string" && value.startsWith("eyJ")) {
+          authToken = value;
+          logger.debug("Found authToken in sessionStorage", { key });
+          break;
+        }
+      }
+    }
+
+    if (!authToken) {
+      throw new Error("Valid AuthToken not found in storage");
     }
 
     return {
@@ -130,8 +135,8 @@ class HttpTaskService {
   async checkNetworkAvailability() {
     const testUrls = [
       "https://admin.praktikum.yandex-team.ru",
+      "https://praktikum-admin.yandex-team.ru",
       "https://ya.ru",
-      "https://google.com",
     ];
 
     for (const testUrl of testUrls) {

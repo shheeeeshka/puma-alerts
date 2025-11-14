@@ -18,7 +18,7 @@ class TaskManager {
     this.monitoringActive = false;
     this.lastTaskCount = 0;
     this.authNotificationSent = false;
-    this.screenshotsDir = path.join(__dirname, "..", "screenshots");
+    this.screenshotsDir = path.join(process.cwd(), "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
   }
@@ -84,20 +84,19 @@ class TaskManager {
 
   async takeTaskOnPraktikumPage(taskUrl) {
     try {
+      const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
+      if (httpSuccess) {
+        logger.info("Task taken successfully via HTTP");
+        return { success: true, method: "http" };
+      }
+
+      logger.info("Falling back to UI method");
       const taskPage = await this.browserManager.openNewTab();
       try {
         await taskPage.goto(taskUrl, {
           waitUntil: "networkidle0",
           timeout: 15000,
         });
-
-        const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
-        if (httpSuccess) {
-          logger.info("Task taken successfully via HTTP");
-          return { success: true, method: "http" };
-        }
-
-        logger.info("Falling back to UI method");
 
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
@@ -164,7 +163,6 @@ class TaskManager {
 
     try {
       const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
-      console.log({ success, method });
       if (success) {
         this.tasksTaken++;
         await this.notifier.sendText(
@@ -344,15 +342,40 @@ class TaskManager {
         const tasksList = tasksWithUrls
           .map((task) => `• <a href="${task.url}">${task.title}</a>`)
           .join("\n");
-        await this.notifier.sendText(
-          `🚀 <b>${
-            isInitial
-              ? "Обнаружены задачи при запуске!"
-              : "Обнаружены новые задачи!"
-          }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-            CONFIG.maxTasks
-          }`
-        );
+
+        let screenshotName = null;
+        try {
+          screenshotName = await this.takeScreenshot(mainPage, "new_tasks");
+        } catch (error) {
+          logger.warn("Не удалось сделать скриншот новых задач", {
+            error: error.message,
+          });
+        }
+
+        if (screenshotName) {
+          await this.notifier.sendAlert({
+            imagePath: screenshotName,
+            link: CONFIG.targetBoardUrl,
+            caption: `🚀 <b>${
+              isInitial
+                ? "Обнаружены задачи при запуске!"
+                : "Обнаружены новые задачи!"
+            }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+              CONFIG.maxTasks
+            }`,
+            showBoardButton: true,
+          });
+        } else {
+          await this.notifier.sendText(
+            `🚀 <b>${
+              isInitial
+                ? "Обнаружены задачи при запуске!"
+                : "Обнаружены новые задачи!"
+            }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+              CONFIG.maxTasks
+            }`
+          );
+        }
 
         if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
           const { filteredTasks } = await this.filterTasksBySprint(
