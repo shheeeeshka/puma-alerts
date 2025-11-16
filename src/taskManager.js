@@ -3,11 +3,7 @@ import CONFIG from "./config.js";
 import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import HttpTaskService from "./httpTaskService.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 class TaskManager {
   constructor(browserManager, notifier) {
@@ -21,6 +17,8 @@ class TaskManager {
     this.screenshotsDir = path.join(process.cwd(), "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
+    this.assignedTasks = new Set();
+    console.log("process path : ", process.cwd());
   }
 
   async ensureScreenshotsDir() {
@@ -49,6 +47,7 @@ class TaskManager {
     this.authNotificationSent = false;
     this.notifiedTasks.clear();
     this.processingTasks.clear();
+    this.assignedTasks.clear();
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -82,6 +81,59 @@ class TaskManager {
     }
   }
 
+  async verifyTaskAssignment(taskPage) {
+    try {
+      await sleep(2);
+
+      const assignmentStatus = await taskPage.evaluate(() => {
+        const timerElement = document.querySelector(
+          ".review-header__review-status_status_reviewing"
+        );
+        const hasTimer = timerElement?.textContent?.includes("Таймер SLA");
+
+        const reviewFooter = document.querySelector(".review-footer");
+        const hasButtons =
+          reviewFooter &&
+          reviewFooter.querySelector(
+            'button[class*="review-footer-action_type_fill-rubricator"]'
+          ) &&
+          reviewFooter.querySelector(
+            'button[class*="review-footer-action_type_fail"]'
+          );
+
+        const takeButton = document.querySelector(
+          ".review-header__button-take"
+        );
+        const buttonVisible =
+          takeButton && getComputedStyle(takeButton).display !== "none";
+        const buttonDisabled = takeButton?.disabled;
+
+        return {
+          assigned: hasTimer && hasButtons,
+          buttonAvailable: !buttonVisible || buttonDisabled,
+        };
+      });
+
+      if (assignmentStatus.assigned) {
+        logger.info("Задача успешно взята - обнаружены элементы назначения");
+        return true;
+      }
+
+      if (assignmentStatus.buttonAvailable) {
+        logger.info("Задача взята - кнопка 'Взять' недоступна");
+        return true;
+      }
+
+      logger.info("Задача не взята - элементы назначения не обнаружены");
+      return false;
+    } catch (error) {
+      logger.error("Ошибка проверки назначения задачи", {
+        error: error.message,
+      });
+      return false;
+    }
+  }
+
   async takeTaskOnPraktikumPage(taskUrl) {
     try {
       const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
@@ -98,47 +150,40 @@ class TaskManager {
           timeout: 15000,
         });
 
+        await sleep(2);
+
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
             ".review-header__button-take",
             ".prisma-button2_view_primary",
             'button:contains("Взять")',
           ];
+
           for (const selector of selectors) {
-            const element = document.querySelector(selector);
-            if (element?.offsetParent && !element.disabled) {
-              element.click();
-              return true;
+            const elements = document.querySelectorAll(selector);
+            for (const element of elements) {
+              if (
+                element?.offsetParent &&
+                !element.disabled &&
+                element.textContent.includes("Взять")
+              ) {
+                element.click();
+                return true;
+              }
             }
           }
           return false;
         });
 
         if (buttonClicked) {
-          await sleep(1.2);
-          await taskPage.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight);
-          });
-          await sleep(1.5);
-          const success = await taskPage.evaluate(() => {
-            const hasTimer = document
-              .querySelector(".review-header__review-status_status_reviewing")
-              ?.textContent?.includes("Таймер SLA");
-            const reviewFooter = document.querySelector(".review-footer");
-            const hasButtons =
-              reviewFooter &&
-              reviewFooter.querySelector(
-                'button[class*="review-footer-action_type_fill-rubricator"]'
-              ) &&
-              reviewFooter.querySelector(
-                'button[class*="review-footer-action_type_fail"]'
-              );
+          await sleep(3);
 
-            return hasTimer && hasButtons;
-          });
+          const isAssigned = await this.verifyTaskAssignment(taskPage);
+
           await this.takeScreenshot(taskPage, "assign_attempt");
-          return { success, method: "ui" };
+          return { success: isAssigned, method: "ui" };
         }
+
         return { success: false, method: "ui" };
       } finally {
         await taskPage.close();
@@ -151,6 +196,16 @@ class TaskManager {
 
   async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
+      logger.info("Автозабор отключен или достигнут лимит задач", {
+        autoAssign: CONFIG.autoAssign,
+        tasksTaken: this.tasksTaken,
+        maxTasks: CONFIG.maxTasks,
+      });
+      return false;
+    }
+
+    if (this.assignedTasks.has(taskKey)) {
+      logger.info("Задача уже взята", { taskKey });
       return false;
     }
 
@@ -165,11 +220,20 @@ class TaskManager {
       const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
       if (success) {
         this.tasksTaken++;
+        this.assignedTasks.add(taskKey);
         await this.notifier.sendText(
           `✅ Задача взята (${method.toUpperCase()})\n${taskTitle}\nВзято: ${
             this.tasksTaken
           }/${CONFIG.maxTasks}`
         );
+        logger.info("Задача успешно взята", {
+          taskKey,
+          method,
+          tasksTaken: this.tasksTaken,
+          maxTasks: CONFIG.maxTasks,
+        });
+      } else {
+        logger.info("Не удалось взять задачу", { taskKey, method });
       }
       return success;
     } catch (error) {
@@ -253,9 +317,8 @@ class TaskManager {
 
     for (const taskKey of tasks) {
       const title = taskTitles[taskKey];
-      const hasSprintBrackets = /\[\d+\]/.test(title);
 
-      if (hasSprintBrackets) {
+      if (CONFIG.sprintWhitelist.length > 0) {
         const shouldProcess = checkSprintWhitelist(
           title,
           CONFIG.sprintWhitelist
@@ -264,7 +327,7 @@ class TaskManager {
           filteredTasks.push(taskKey);
           filteredTitles[taskKey] = title;
         }
-      } else if (CONFIG.sprintWhitelist.length === 0) {
+      } else {
         filteredTasks.push(taskKey);
         filteredTitles[taskKey] = title;
       }
@@ -273,6 +336,7 @@ class TaskManager {
     logger.info("Задачи отфильтрованы по спринтам", {
       original: tasks.length,
       filtered: filteredTasks.length,
+      whitelist: CONFIG.sprintWhitelist,
     });
     return { filteredTasks, filteredTitles };
   }
@@ -286,7 +350,9 @@ class TaskManager {
 
       const tasksToProcess = newTasks.filter(
         (taskKey) =>
-          !this.notifiedTasks.has(taskKey) && !this.processingTasks.has(taskKey)
+          !this.notifiedTasks.has(taskKey) &&
+          !this.processingTasks.has(taskKey) &&
+          !this.assignedTasks.has(taskKey)
       );
 
       if (!tasksToProcess.length) {
@@ -339,7 +405,16 @@ class TaskManager {
       }
 
       if (tasksWithUrls.length > 0) {
-        const tasksList = tasksWithUrls
+        const { filteredTasks } = await this.filterTasksBySprint(
+          tasksToProcess,
+          taskTitles
+        );
+
+        const filteredTasksWithUrls = tasksWithUrls.filter((task) =>
+          filteredTasks.includes(task.key)
+        );
+
+        const tasksList = filteredTasksWithUrls
           .map((task) => `• <a href="${task.url}">${task.title}</a>`)
           .join("\n");
 
@@ -352,69 +427,70 @@ class TaskManager {
           });
         }
 
-        if (screenshotName) {
-          await this.notifier.sendAlert({
-            imagePath: screenshotName,
-            link: CONFIG.targetBoardUrl,
-            caption: `🚀 <b>${
-              isInitial
-                ? "Обнаружены задачи при запуске!"
-                : "Обнаружены новые задачи!"
-            }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-              CONFIG.maxTasks
-            }`,
-            showBoardButton: true,
-          });
-        } else {
-          await this.notifier.sendText(
-            `🚀 <b>${
-              isInitial
-                ? "Обнаружены задачи при запуске!"
-                : "Обнаружены новые задачи!"
-            }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-              CONFIG.maxTasks
-            }`
-          );
-        }
-
-        if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-          const { filteredTasks } = await this.filterTasksBySprint(
-            tasksToProcess,
-            taskTitles
-          );
-          const tasksToAssign = tasksWithUrls.filter((task) =>
-            filteredTasks.includes(task.key)
-          );
-
-          logger.info("Задачи для автозабора", {
-            count: tasksToAssign.length,
-            tasks: tasksToAssign.map((t) => t.key),
-          });
-          const assignedTasks = [];
-
-          for (const task of tasksToAssign) {
-            if (this.tasksTaken >= CONFIG.maxTasks) break;
-
-            const assigned = await this.handleTaskAssignment(
-              task.key,
-              task.title,
-              task.url
-            );
-            if (assigned) {
-              assignedTasks.push(task.title);
-            }
-          }
-
-          if (assignedTasks.length > 0) {
+        if (filteredTasksWithUrls.length > 0) {
+          if (screenshotName) {
+            await this.notifier.sendAlert({
+              imagePath: screenshotName,
+              link: CONFIG.targetBoardUrl,
+              caption: `🚀 <b>${
+                isInitial
+                  ? "Обнаружены задачи при запуске!"
+                  : "Обнаружены новые задачи!"
+              }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+                CONFIG.maxTasks
+              }`,
+              showBoardButton: true,
+            });
+          } else {
             await this.notifier.sendText(
-              `✅ Удалось взять в работу ${
-                assignedTasks.length
-              } задач:\n${assignedTasks
-                .map((task) => `• ${task}`)
-                .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
+              `🚀 <b>${
+                isInitial
+                  ? "Обнаружены задачи при запуске!"
+                  : "Обнаружены новые задачи!"
+              }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
                 CONFIG.maxTasks
               }`
             );
+          }
+
+          if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
+            const tasksToAssign = filteredTasksWithUrls.filter(
+              (task) => !this.assignedTasks.has(task.key)
+            );
+
+            logger.info("Задачи для автозабора", {
+              count: tasksToAssign.length,
+              tasks: tasksToAssign.map((t) => t.key),
+            });
+            const assignedTasks = [];
+
+            for (const task of tasksToAssign) {
+              if (this.tasksTaken >= CONFIG.maxTasks) {
+                logger.info("Достигнут лимит задач, прекращаем автозабор");
+                break;
+              }
+
+              const assigned = await this.handleTaskAssignment(
+                task.key,
+                task.title,
+                task.url
+              );
+              if (assigned) {
+                assignedTasks.push(task.title);
+              }
+            }
+
+            if (assignedTasks.length > 0) {
+              await this.notifier.sendText(
+                `✅ Удалось взять в работу ${
+                  assignedTasks.length
+                } задач:\n${assignedTasks
+                  .map((task) => `• ${task}`)
+                  .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
+                  CONFIG.maxTasks
+                }`
+              );
+            }
           }
         }
       }
@@ -564,7 +640,8 @@ class TaskManager {
           }
 
           const newTasks = currentTasks.filter(
-            (task) => !this.notifiedTasks.has(task)
+            (task) =>
+              !this.notifiedTasks.has(task) && !this.assignedTasks.has(task)
           );
           if (newTasks.length > 0) {
             logger.info("Обнаружены новые задачи", { newTasks });

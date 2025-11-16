@@ -1,15 +1,11 @@
 import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 class HttpTaskService {
   constructor(browserManager) {
     this.browserManager = browserManager;
-    this.debugDir = path.join(__dirname, "..", "debug_logs");
+    this.debugDir = path.join(process.cwd(), "debug_logs");
   }
 
   async ensureDebugDir() {

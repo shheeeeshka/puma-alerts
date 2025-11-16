@@ -1,14 +1,10 @@
 import nodemailer from "nodemailer";
 import path from "path";
-import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import logger from "./logger.js";
 import fs from "fs";
 
 config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 class MailService {
   constructor() {
@@ -30,7 +26,7 @@ class MailService {
     }
 
     try {
-      const imagePath = path.join(__dirname, "..", "screenshots", imageName);
+      const imagePath = path.join(process.cwd(), "screenshots", imageName);
 
       const emailContent = message
         ? `<div style="text-align: center;">
