@@ -1,6 +1,7 @@
 import logger from "./logger.js";
 import fs from "fs";
 import path from "path";
+import { sleep } from "./utils.js";
 
 class HttpTaskService {
   constructor(browserManager) {
@@ -130,7 +131,6 @@ class HttpTaskService {
 
   async checkNetworkAvailability() {
     const testUrls = [
-      "https://admin.praktikum.yandex-team.ru",
       "https://praktikum-admin.yandex-team.ru",
       "https://ya.ru",
     ];
@@ -196,7 +196,7 @@ class HttpTaskService {
       const { headers } = await this.createRequestContext(taskUrl);
       debugData.headers = headers;
 
-      const startReviewUrl = `https://admin.praktikum.yandex-team.ru/api/revisor/${homeworkId}/start_review/?secret=${secret}`;
+      const startReviewUrl = `https://praktikum-admin.yandex-team.ru/api/revisor/${homeworkId}/start_review/?secret=${secret}`;
       debugData.requestUrl = startReviewUrl;
 
       debugData.steps.push({

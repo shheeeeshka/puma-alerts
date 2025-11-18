@@ -83,36 +83,84 @@ class TaskManager {
 
   async verifyTaskAssignment(taskPage) {
     try {
-      await sleep(2);
+      await sleep(1);
+
+      if (taskPage.isClosed()) {
+        logger.error("Страница задачи была закрыта");
+        return false;
+      }
+
+      if (!taskPage.isClosed()) {
+        await taskPage.reload({
+          waitUntil: "domcontentloaded",
+          timeout: 10000,
+        });
+        await sleep(2);
+      }
 
       const assignmentStatus = await taskPage.evaluate(() => {
-        const timerElement = document.querySelector(
-          ".review-header__review-status_status_reviewing"
-        );
-        const hasTimer = timerElement?.textContent?.includes("Таймер SLA");
-
-        const reviewFooter = document.querySelector(".review-footer");
-        const hasButtons =
-          reviewFooter &&
-          reviewFooter.querySelector(
-            'button[class*="review-footer-action_type_fill-rubricator"]'
-          ) &&
-          reviewFooter.querySelector(
-            'button[class*="review-footer-action_type_fail"]'
+        try {
+          const timerElement = document.querySelector(
+            ".review-header__review-status_status_reviewing"
           );
+          const hasTimer = timerElement?.textContent?.includes("Таймер SLA");
 
-        const takeButton = document.querySelector(
-          ".review-header__button-take"
-        );
-        const buttonVisible =
-          takeButton && getComputedStyle(takeButton).display !== "none";
-        const buttonDisabled = takeButton?.disabled;
+          const reviewFooter = document.querySelector(".review-footer");
+          const hasButtons =
+            reviewFooter &&
+            reviewFooter.querySelector(
+              'button[class*="review-footer-action_type_fill-rubricator"]'
+            ) &&
+            reviewFooter.querySelector(
+              'button[class*="review-footer-action_type_fail"]'
+            );
 
-        return {
-          assigned: hasTimer && hasButtons,
-          buttonAvailable: !buttonVisible || buttonDisabled,
-        };
+          const takeButton = document.querySelector(
+            ".review-header__button-take"
+          );
+          const buttonVisible =
+            takeButton && getComputedStyle(takeButton).display !== "none";
+          const buttonDisabled = takeButton?.disabled;
+
+          const pageTitle = document.title;
+          const url = window.location.href;
+          const bodyText = document.body.textContent.substring(0, 200);
+
+          return {
+            assigned: hasTimer && hasButtons,
+            buttonAvailable: !buttonVisible || buttonDisabled,
+            debug: {
+              pageTitle,
+              url,
+              bodyText,
+              hasTimer,
+              hasButtons,
+              buttonVisible,
+              buttonDisabled,
+            },
+          };
+        } catch (error) {
+          console.error("Error in page evaluation:", error);
+          return {
+            error: error.message,
+            assigned: false,
+            buttonAvailable: false,
+          };
+        }
       });
+
+      console.log("Assignment status check", {
+        assigned: assignmentStatus.assigned,
+        buttonAvailable: assignmentStatus.buttonAvailable,
+        debug: assignmentStatus.debug,
+      });
+
+      if (assignmentStatus.error) {
+        logger.error("Error in assignment verification", {
+          error: assignmentStatus.error,
+        });
+        return false;
+      }
 
       if (assignmentStatus.assigned) {
         logger.info("Задача успешно взята - обнаружены элементы назначения");
@@ -124,11 +172,14 @@ class TaskManager {
         return true;
       }
 
-      logger.info("Задача не взята - элементы назначения не обнаружены");
+      logger.info("Задача не взята - элементы назначения не обнаружены", {
+        debugInfo: assignmentStatus.debug,
+      });
       return false;
     } catch (error) {
       logger.error("Ошибка проверки назначения задачи", {
         error: error.message,
+        stack: error.stack,
       });
       return false;
     }
