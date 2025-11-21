@@ -83,8 +83,6 @@ class TaskManager {
 
   async verifyTaskAssignment(taskPage) {
     try {
-      await sleep(1);
-
       if (taskPage.isClosed()) {
         logger.error("Страница задачи была закрыта");
         return false;
@@ -92,95 +90,41 @@ class TaskManager {
 
       if (!taskPage.isClosed()) {
         await taskPage.reload({
-          waitUntil: "domcontentloaded",
+          waitUntil: "networkidle0",
           timeout: 10000,
         });
         await sleep(2);
       }
 
-      const assignmentStatus = await taskPage.evaluate(() => {
-        try {
-          const timerElement = document.querySelector(
-            ".review-header__review-status_status_reviewing"
+      await taskPage.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+      });
+
+      console.log("=========");
+
+      const success = await taskPage.evaluate(() => {
+        const hasTimer = document
+          .querySelector(".review-header__review-status_status_reviewing")
+          ?.textContent?.includes("Таймер SLA");
+        const reviewFooter = document.querySelector(".review-footer");
+        const hasButtons =
+          reviewFooter &&
+          reviewFooter.querySelector(
+            'button[class*="review-footer-action_type_fill-rubricator"]'
+          ) &&
+          reviewFooter.querySelector(
+            'button[class*="review-footer-action_type_fail"]'
           );
-          const hasTimer = timerElement?.textContent?.includes("Таймер SLA");
 
-          const reviewFooter = document.querySelector(".review-footer");
-          const hasButtons =
-            reviewFooter &&
-            reviewFooter.querySelector(
-              'button[class*="review-footer-action_type_fill-rubricator"]'
-            ) &&
-            reviewFooter.querySelector(
-              'button[class*="review-footer-action_type_fail"]'
-            );
-
-          const takeButton = document.querySelector(
-            ".review-header__button-take"
-          );
-          const buttonVisible =
-            takeButton && getComputedStyle(takeButton).display !== "none";
-          const buttonDisabled = takeButton?.disabled;
-
-          const pageTitle = document.title;
-          const url = window.location.href;
-          const bodyText = document.body.textContent.substring(0, 200);
-
-          return {
-            assigned: hasTimer && hasButtons,
-            buttonAvailable: !buttonVisible || buttonDisabled,
-            debug: {
-              pageTitle,
-              url,
-              bodyText,
-              hasTimer,
-              hasButtons,
-              buttonVisible,
-              buttonDisabled,
-            },
-          };
-        } catch (error) {
-          console.error("Error in page evaluation:", error);
-          return {
-            error: error.message,
-            assigned: false,
-            buttonAvailable: false,
-          };
-        }
+        return hasTimer && hasButtons;
       });
 
-      console.log("Assignment status check", {
-        assigned: assignmentStatus.assigned,
-        buttonAvailable: assignmentStatus.buttonAvailable,
-        debug: assignmentStatus.debug,
-      });
+      console.log("isSuccess :", success);
 
-      if (assignmentStatus.error) {
-        logger.error("Error in assignment verification", {
-          error: assignmentStatus.error,
-        });
-        return false;
-      }
-
-      if (assignmentStatus.assigned) {
-        logger.info("Задача успешно взята - обнаружены элементы назначения");
-        return true;
-      }
-
-      if (assignmentStatus.buttonAvailable) {
-        logger.info("Задача взята - кнопка 'Взять' недоступна");
-        return true;
-      }
-
-      logger.info("Задача не взята - элементы назначения не обнаружены", {
-        debugInfo: assignmentStatus.debug,
-      });
-      return false;
+      return success;
     } catch (error) {
-      logger.error("Ошибка проверки назначения задачи", {
-        error: error.message,
-        stack: error.stack,
-      });
+      logger.error("Ошибка проверки назначения задачи");
+      console.error(error);
       return false;
     }
   }
@@ -201,8 +145,6 @@ class TaskManager {
           timeout: 15000,
         });
 
-        await sleep(2);
-
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
             ".review-header__button-take",
@@ -211,16 +153,10 @@ class TaskManager {
           ];
 
           for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-            for (const element of elements) {
-              if (
-                element?.offsetParent &&
-                !element.disabled &&
-                element.textContent.includes("Взять")
-              ) {
-                element.click();
-                return true;
-              }
+            const element = document.querySelector(selector);
+            if (element?.offsetParent && !element.disabled) {
+              element.click();
+              return true;
             }
           }
           return false;
