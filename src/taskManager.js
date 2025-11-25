@@ -17,7 +17,6 @@ class TaskManager {
     this.screenshotsDir = path.join(process.cwd(), "screenshots");
     this.notifiedTasks = new Set();
     this.processingTasks = new Set();
-    this.assignedTasks = new Set();
     console.log("process path : ", process.cwd());
   }
 
@@ -47,7 +46,6 @@ class TaskManager {
     this.authNotificationSent = false;
     this.notifiedTasks.clear();
     this.processingTasks.clear();
-    this.assignedTasks.clear();
     logger.info("Запуск мониторинга задач");
     await this.trackTasks();
   }
@@ -183,16 +181,6 @@ class TaskManager {
 
   async handleTaskAssignment(taskKey, taskTitle, taskUrl) {
     if (!CONFIG.autoAssign || this.tasksTaken >= CONFIG.maxTasks) {
-      logger.info("Автозабор отключен или достигнут лимит задач", {
-        autoAssign: CONFIG.autoAssign,
-        tasksTaken: this.tasksTaken,
-        maxTasks: CONFIG.maxTasks,
-      });
-      return false;
-    }
-
-    if (this.assignedTasks.has(taskKey)) {
-      logger.info("Задача уже взята", { taskKey });
       return false;
     }
 
@@ -207,20 +195,11 @@ class TaskManager {
       const { success, method } = await this.takeTaskOnPraktikumPage(taskUrl);
       if (success) {
         this.tasksTaken++;
-        this.assignedTasks.add(taskKey);
         await this.notifier.sendText(
           `✅ Задача взята (${method.toUpperCase()})\n${taskTitle}\nВзято: ${
             this.tasksTaken
           }/${CONFIG.maxTasks}`
         );
-        logger.info("Задача успешно взята", {
-          taskKey,
-          method,
-          tasksTaken: this.tasksTaken,
-          maxTasks: CONFIG.maxTasks,
-        });
-      } else {
-        logger.info("Не удалось взять задачу", { taskKey, method });
       }
       return success;
     } catch (error) {
@@ -304,8 +283,9 @@ class TaskManager {
 
     for (const taskKey of tasks) {
       const title = taskTitles[taskKey];
+      const hasSprintBrackets = /\[\d+\]/.test(title);
 
-      if (CONFIG.sprintWhitelist.length > 0) {
+      if (hasSprintBrackets) {
         const shouldProcess = checkSprintWhitelist(
           title,
           CONFIG.sprintWhitelist
@@ -314,7 +294,7 @@ class TaskManager {
           filteredTasks.push(taskKey);
           filteredTitles[taskKey] = title;
         }
-      } else {
+      } else if (CONFIG.sprintWhitelist.length === 0) {
         filteredTasks.push(taskKey);
         filteredTitles[taskKey] = title;
       }
@@ -323,7 +303,6 @@ class TaskManager {
     logger.info("Задачи отфильтрованы по спринтам", {
       original: tasks.length,
       filtered: filteredTasks.length,
-      whitelist: CONFIG.sprintWhitelist,
     });
     return { filteredTasks, filteredTitles };
   }
@@ -337,9 +316,7 @@ class TaskManager {
 
       const tasksToProcess = newTasks.filter(
         (taskKey) =>
-          !this.notifiedTasks.has(taskKey) &&
-          !this.processingTasks.has(taskKey) &&
-          !this.assignedTasks.has(taskKey)
+          !this.notifiedTasks.has(taskKey) && !this.processingTasks.has(taskKey)
       );
 
       if (!tasksToProcess.length) {
@@ -392,92 +369,57 @@ class TaskManager {
       }
 
       if (tasksWithUrls.length > 0) {
-        const { filteredTasks } = await this.filterTasksBySprint(
-          tasksToProcess,
-          taskTitles
-        );
-
-        const filteredTasksWithUrls = tasksWithUrls.filter((task) =>
-          filteredTasks.includes(task.key)
-        );
-
-        const tasksList = filteredTasksWithUrls
+        const tasksList = tasksWithUrls
           .map((task) => `• <a href="${task.url}">${task.title}</a>`)
           .join("\n");
+        await this.notifier.sendText(
+          `🚀 <b>${
+            isInitial
+              ? "Обнаружены задачи при запуске!"
+              : "Обнаружены новые задачи!"
+          }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+            CONFIG.maxTasks
+          }`
+        );
 
-        let screenshotName = null;
-        try {
-          screenshotName = await this.takeScreenshot(mainPage, "new_tasks");
-        } catch (error) {
-          logger.warn("Не удалось сделать скриншот новых задач", {
-            error: error.message,
+        if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
+          const { filteredTasks } = await this.filterTasksBySprint(
+            tasksToProcess,
+            taskTitles
+          );
+          const tasksToAssign = tasksWithUrls.filter((task) =>
+            filteredTasks.includes(task.key)
+          );
+
+          logger.info("Задачи для автозабора", {
+            count: tasksToAssign.length,
+            tasks: tasksToAssign.map((t) => t.key),
           });
-        }
+          const assignedTasks = [];
 
-        if (filteredTasksWithUrls.length > 0) {
-          if (screenshotName) {
-            await this.notifier.sendAlert({
-              imagePath: screenshotName,
-              link: CONFIG.targetBoardUrl,
-              caption: `🚀 <b>${
-                isInitial
-                  ? "Обнаружены задачи при запуске!"
-                  : "Обнаружены новые задачи!"
-              }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
-                CONFIG.maxTasks
-              }`,
-              showBoardButton: true,
-            });
-          } else {
+          for (const task of tasksToAssign) {
+            if (this.tasksTaken >= CONFIG.maxTasks) break;
+
+            const assigned = await this.handleTaskAssignment(
+              task.key,
+              task.title,
+              task.url
+            );
+            if (assigned) {
+              assignedTasks.push(task.title);
+            }
+          }
+
+          if (assignedTasks.length > 0) {
             await this.notifier.sendText(
-              `🚀 <b>${
-                isInitial
-                  ? "Обнаружены задачи при запуске!"
-                  : "Обнаружены новые задачи!"
-              }</b>\n\n${tasksList}\n\nВзято задач: ${this.tasksTaken}/${
+              `✅ Удалось взять в работу ${
+                assignedTasks.length
+              } задач:\n${assignedTasks
+                .map((task) => `• ${task}`)
+                .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
                 CONFIG.maxTasks
               }`
             );
-          }
-
-          if (CONFIG.autoAssign && this.tasksTaken < CONFIG.maxTasks) {
-            const tasksToAssign = filteredTasksWithUrls.filter(
-              (task) => !this.assignedTasks.has(task.key)
-            );
-
-            logger.info("Задачи для автозабора", {
-              count: tasksToAssign.length,
-              tasks: tasksToAssign.map((t) => t.key),
-            });
-            const assignedTasks = [];
-
-            for (const task of tasksToAssign) {
-              if (this.tasksTaken >= CONFIG.maxTasks) {
-                logger.info("Достигнут лимит задач, прекращаем автозабор");
-                break;
-              }
-
-              const assigned = await this.handleTaskAssignment(
-                task.key,
-                task.title,
-                task.url
-              );
-              if (assigned) {
-                assignedTasks.push(task.title);
-              }
-            }
-
-            if (assignedTasks.length > 0) {
-              await this.notifier.sendText(
-                `✅ Удалось взять в работу ${
-                  assignedTasks.length
-                } задач:\n${assignedTasks
-                  .map((task) => `• ${task}`)
-                  .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
-                  CONFIG.maxTasks
-                }`
-              );
-            }
           }
         }
       }
@@ -627,8 +569,7 @@ class TaskManager {
           }
 
           const newTasks = currentTasks.filter(
-            (task) =>
-              !this.notifiedTasks.has(task) && !this.assignedTasks.has(task)
+            (task) => !this.notifiedTasks.has(task)
           );
           if (newTasks.length > 0) {
             logger.info("Обнаружены новые задачи", { newTasks });
