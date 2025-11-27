@@ -88,7 +88,7 @@ class TaskManager {
 
       if (!taskPage.isClosed()) {
         await taskPage.reload({
-          waitUntil: "networkidle0",
+          waitUntil: "domcontentloaded",
           timeout: 10000,
         });
         await sleep(2);
@@ -114,12 +114,12 @@ class TaskManager {
             'button[class*="review-footer-action_type_fail"]'
           );
 
-        return hasTimer && hasButtons;
+        return { hasTimer, hasButtons };
       });
 
       console.log("isSuccess :", success);
 
-      return success;
+      return !!(success?.hasTimer && success?.hasButtons);
     } catch (error) {
       logger.error("Ошибка проверки назначения задачи");
       console.error(error);
@@ -129,25 +129,25 @@ class TaskManager {
 
   async takeTaskOnPraktikumPage(taskUrl) {
     try {
-      const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
-      if (httpSuccess) {
-        logger.info("Task taken successfully via HTTP");
-        return { success: true, method: "http" };
-      }
+      // const httpSuccess = await this.httpTaskService.takeTask(taskUrl);
+      // if (httpSuccess) {
+      //   logger.info("Task taken successfully via HTTP");
+      //   return { success: true, method: "http" };
+      // }
 
       logger.info("Falling back to UI method");
       const taskPage = await this.browserManager.openNewTab();
       try {
         await taskPage.goto(taskUrl, {
-          waitUntil: "networkidle0",
-          timeout: 15000,
+          waitUntil: "domcontentloaded",
+          timeout: 8000,
         });
 
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
-            ".review-header__button-take",
             ".prisma-button2_view_primary",
             'button:contains("Взять")',
+            // ".review-header__button-take",
           ];
 
           for (const selector of selectors) {
@@ -161,7 +161,7 @@ class TaskManager {
         });
 
         if (buttonClicked) {
-          await sleep(3);
+          await sleep(2);
 
           const isAssigned = await this.verifyTaskAssignment(taskPage);
 
