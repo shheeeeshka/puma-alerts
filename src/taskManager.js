@@ -58,7 +58,7 @@ class TaskManager {
   async extractTaskUrlFromModal(page) {
     try {
       await page.waitForSelector('a[href*="praktikum-admin.yandex-team.ru"]', {
-        timeout: 5000,
+        timeout: 8000,
       });
       const url = await page.evaluate(() => {
         const linkElement = document.querySelector(
@@ -75,6 +75,8 @@ class TaskManager {
       logger.error("Ошибка извлечения URL из модального окна", {
         error: error.message,
       });
+      console.log(error);
+      console.log(error.message);
       return null;
     }
   }
@@ -139,8 +141,8 @@ class TaskManager {
       const taskPage = await this.browserManager.openNewTab();
       try {
         await taskPage.goto(taskUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 8000,
+          waitUntil: "networkidle0",
+          timeout: 9000,
         });
 
         const buttonClicked = await taskPage.evaluate(() => {
@@ -204,6 +206,8 @@ class TaskManager {
       return success;
     } catch (error) {
       logger.error("Task assignment failed", { taskKey, error: error.message });
+      console.log(error);
+      console.log(error.message);
       return false;
     } finally {
       this.processingTasks.delete(taskKey);
@@ -351,7 +355,7 @@ class TaskManager {
         }, taskKey);
 
         if (taskClicked) {
-          await sleep(0.4);
+          await sleep(1.4);
           const taskUrl = await this.extractTaskUrlFromModal(mainPage);
           if (taskUrl) {
             tasksWithUrls.push({

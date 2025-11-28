@@ -176,7 +176,7 @@ class BrowserManager {
 
     try {
       const navigationOptions = {
-        waitUntil: "domcontentloaded",
+        waitUntil: "networkidle0",
         timeout: 30000,
         ...options,
       };
