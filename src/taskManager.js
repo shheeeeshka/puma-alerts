@@ -96,32 +96,33 @@ class TaskManager {
         await sleep(2);
       }
 
-      await taskPage.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-      });
+      await taskPage
+        .evaluate(() => {
+          window.scrollTo(0, document.body.scrollHeight);
+        })
+        .catch((e) => {
+          logger.error("Ошибка скролла страницы при проверке задачи", {
+            error: e.message,
+          });
+        });
 
       console.log("=========");
 
       const success = await taskPage.evaluate(() => {
-        const hasTimer = document
-          .querySelector(".review-header__review-status_status_reviewing")
-          ?.textContent?.includes("Таймер SLA");
-        const reviewFooter = document.querySelector(".review-footer");
-        const hasButtons =
-          reviewFooter &&
-          reviewFooter.querySelector(
-            'button[class*="review-footer-action_type_fill-rubricator"]'
-          ) &&
-          reviewFooter.querySelector(
-            'button[class*="review-footer-action_type_fail"]'
-          );
+        const allButtons = Array.from(document.querySelectorAll("button"));
+        const hasFailButton = allButtons.some((btn) =>
+          btn.textContent?.includes("Незачет")
+        );
+        const hasGradeButton = allButtons.some((btn) =>
+          btn.textContent?.includes("Оценить проект")
+        );
 
-        return { hasTimer, hasButtons };
+        return { hasFailButton, hasGradeButton };
       });
 
       console.log("isSuccess :", success);
 
-      return !!(success?.hasTimer && success?.hasButtons);
+      return !!(success?.hasFailButton && success?.hasGradeButton);
     } catch (error) {
       logger.error("Ошибка проверки назначения задачи");
       console.error(error);
