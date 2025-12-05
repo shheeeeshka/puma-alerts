@@ -109,20 +109,20 @@ class TaskManager {
       console.log("=========");
 
       const success = await taskPage.evaluate(() => {
-        const allButtons = Array.from(document.querySelectorAll("button"));
-        const hasFailButton = allButtons.some((btn) =>
-          btn.textContent?.includes("Незачет")
-        );
+        // const allButtons = Array.from(document.querySelectorAll("button"));
+        // const hasFailButton = allButtons.some((btn) =>
+          // btn.textContent?.includes("Незачет")
+        // );
         const hasGradeButton = allButtons.some((btn) =>
           btn.textContent?.includes("Оценить проект")
         );
 
-        return { hasFailButton, hasGradeButton };
+        return hasGradeButton;
       });
 
       console.log("isSuccess :", success);
 
-      return !!(success?.hasFailButton && success?.hasGradeButton);
+      return success;
     } catch (error) {
       logger.error("Ошибка проверки назначения задачи");
       console.error(error);
