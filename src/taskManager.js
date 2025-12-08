@@ -109,7 +109,7 @@ class TaskManager {
       console.log("=========");
 
       const success = await taskPage.evaluate(() => {
-        // const allButtons = Array.from(document.querySelectorAll("button"));
+        const allButtons = Array.from(document.querySelectorAll("button"));
         // const hasFailButton = allButtons.some((btn) =>
           // btn.textContent?.includes("Незачет")
         // );
