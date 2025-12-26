@@ -111,7 +111,7 @@ class TaskManager {
       const success = await taskPage.evaluate(() => {
         const allButtons = Array.from(document.querySelectorAll("button"));
         // const hasFailButton = allButtons.some((btn) =>
-          // btn.textContent?.includes("Незачет")
+        // btn.textContent?.includes("Незачет")
         // );
         const hasGradeButton = allButtons.some((btn) =>
           btn.textContent?.includes("Оценить проект")
@@ -142,9 +142,23 @@ class TaskManager {
       const taskPage = await this.browserManager.openNewTab();
       try {
         await taskPage.goto(taskUrl, {
-          waitUntil: "networkidle0",
+          waitUntil: "domcontentloaded",
           timeout: 9000,
         });
+
+        await sleep(1.5);
+
+        await taskPage
+          .waitForSelector(
+            '.prisma-button2_view_primary, [data-testid="take-button"]',
+            {
+              timeout: 3400,
+              visible: true,
+            }
+          )
+          .catch(() => {
+            logger.debug("Кнопка 'Взять' не появилась сразу, продолжаем");
+          });
 
         const buttonClicked = await taskPage.evaluate(() => {
           const selectors = [
