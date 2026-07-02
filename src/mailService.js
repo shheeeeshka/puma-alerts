@@ -60,6 +60,14 @@ class MailService {
       logger.error("Ошибка отправки email", { error: error.message });
     }
   }
+
+  async sendTextNotification(message) {
+    const htmlMessage = String(message || "")
+      .replace(/\n/g, "<br>")
+      .trim();
+
+    await this.sendAlertMail("", "", htmlMessage || "Получено новое уведомление");
+  }
 }
 
 export default new MailService();

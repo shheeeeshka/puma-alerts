@@ -2,7 +2,6 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import logger from "./logger.js";
-import mailService from "./mailService.js";
 
 const CUSTOM_EMOJI_MAP = new Map([
   ["❌", "5420323339723881652"],
@@ -27,6 +26,7 @@ class TelegramNotifier {
     this.getConfig = getConfig;
     this.isPolling = false;
     this.pollingOffset = 0;
+    this.name = "telegram";
   }
 
   async sendText(message, keyboard = null, chatId = this.chatId) {
@@ -54,20 +54,6 @@ class TelegramNotifier {
       logger.error("Ошибка отправки сообщения в Telegram", {
         error: error.message,
       });
-
-      try {
-        await mailService.sendAlertMail(
-          "",
-          "",
-          `Telegram Error: ${message.substring(0, 100)}`
-        );
-        logger.info("Отправлено уведомление по почте из-за ошибки Telegram");
-      } catch (mailError) {
-        logger.error("Не удалось отправить уведомление по почте", {
-          error: mailError.message,
-        });
-      }
-
       throw error;
     }
   }

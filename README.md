@@ -1,234 +1,190 @@
-# Task Monitor 🤖
+# Puma Alerts
 
-A sophisticated automated task monitoring and management system built with Node.js and Puppeteer. Continuously monitors task boards, automatically assigns tasks based on configurable rules, and provides real-time notifications via Telegram.
+Node.js + Puppeteer сервис для мониторинга доски задач в Tracker, уведомлений о новых задачах и опционального автозабора по настроенным правилам.
 
-## ✨ Features
+## Что умеет
 
-- **Real-time Monitoring**: Continuously scans the configured task widget on the dashboard
-- **Smart Auto-Assignment**: Automatically claims tasks based on sprint whitelist rules
-- **Cross-Platform**: Works on Windows, macOS, and Linux
-- **Telegram Integration**: Instant notifications with task details and status updates
-- **Configurable Limits**: Set maximum task limits and customize sprint filters
-- **Persistent Sessions**: Maintains browser state and authentication
-- **Error Resilience**: Automatic retries and recovery mechanisms
+- Мониторит выбранный виджет на дашборде Tracker
+- Присылает уведомления о новых задачах
+- Может автоматически брать задачи в работу
+- Фильтрует задачи по `SPRINT_WHITELIST`
+- Восстанавливает браузер после части сбоев
+- Поддерживает каналы уведомлений: Telegram, email или оба сразу
 
-## 🚀 Quick Start
+## Требования
 
-### Prerequisites
+- Node.js 18+
+- Google Chrome или Chromium
+- Доступ к Yandex Tracker / ST
+- Для Telegram-уведомлений: бот и `TELEGRAM_BOT_TOKEN`
+- Для email-уведомлений: SMTP-настройки
 
-- Node.js 16+
-- Google Chrome or Chromium
-- Telegram Bot Token ([Create one here](https://t.me/BotFather))
+## Установка
 
-### Installation
-
-1. **Clone the repository**
+1. Клонируйте репозиторий:
 
 ```bash
 git clone <your-repo-url>
-cd task-monitor
+cd puma-alerts
 ```
 
-2. **Install dependencies**
+2. Установите зависимости:
 
 ```bash
 npm install
 ```
 
-3. **Configure environment**
+3. Создайте и заполните `.env`.
 
-```bash
-cp .env.example .env
-```
+## Быстрый старт
 
-4. **Edit `.env` file**
+Минимальный пример `.env`:
 
 ```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
+PUPPETEER_EXECUTABLE_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 
-AUTO_ASSIGN=1
-AUTH=1
-MAX_TASKS=15
-SPRINT_WHITELIST=19,10,14
-TARGET_URL=https://your-target-url.com
-TARGET_BOARD_URL=https://your-board-url.com
+TARGET_BOARD_URL=https://st.yandex-team.ru/dashboard/66958
 TASK_WIDGET_TITLE=Обычные задачи
 
+NOTIFICATION_CHANNELS=telegram
+
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+
+AUTO_ASSIGN=1
+SPRINT_WHITELIST=1,2,3
+MAX_TASKS=2
 USER_DATA_DIR=./tmp/puppeteer_user_data
+LOG_LEVEL=info
+PORT=5023
 ```
 
-5. **Get your Chat ID**
+Запуск:
 
 ```bash
 npm start
 ```
 
-Send any message to your bot and the console will display your Chat ID.
+Если Telegram включён, но `TELEGRAM_CHAT_ID` не задан, приложение ждёт входящее сообщение боту и выводит нужный `chatId` в консоль.
 
-6. **Start monitoring**
+## Каналы уведомлений
 
-```bash
-npm start
+Основная переменная:
+
+```env
+NOTIFICATION_CHANNELS=telegram
 ```
 
-## ⚙️ Configuration
+Поддерживаемые значения:
 
-### Environment Variables
+- `telegram` - уведомления только в Telegram
+- `email` - уведомления только на почту
+- `telegram,email` - отправка в оба канала
 
-| Variable             | Description                      | Default                     |
-| -------------------- | -------------------------------- | --------------------------- |
-| `TELEGRAM_BOT_TOKEN` | Your Telegram Bot token          | -                           |
-| `TELEGRAM_CHAT_ID`   | Your Telegram Chat ID            | -                           |
-| `AUTO_ASSIGN`        | Enable automatic task assignment | `1` (true)                  |
-| `MAX_TASKS`          | Maximum tasks to auto-assign     | `15`                        |
-| `SPRINT_WHITELIST`   | Comma-separated sprint numbers   | -                           |
-| `TARGET_URL`         | Base URL for task links          | -                           |
-| `TARGET_BOARD_URL`   | Dashboard URL to monitor         | -                           |
-| `TASK_WIDGET_TITLE`  | Widget title to scan on dashboard| `Обычные задачи`            |
-| `AUTH`               | Enable authentication handling   | `1` (true)                  |
-| `USER_DATA_DIR`      | Browser profile directory        | `./tmp/puppeteer_user_data` |
+Замечания:
 
-### Telegram Commands
+- Если включён `telegram`, должны быть заданы `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID`.
+- Если включён `email`, должны быть заданы SMTP-переменные.
+- Если включены оба канала, сбой одного канала не блокирует второй.
 
-- `/start` - Initialize the bot
-- `/config` - Open configuration panel
-- `/restart` - Restart monitoring
+## Переменные окружения
 
-## 🏗️ Architecture
+### Основные
 
-```
+| Variable | Description | Default |
+| --- | --- | --- |
+| `TARGET_BOARD_URL` | URL дашборда, который мониторим | - |
+| `TASK_WIDGET_TITLE` | Заголовок виджета с задачами | `Обычные задачи` |
+| `AUTO_ASSIGN` | Включить автозабор задач | `1` |
+| `MAX_TASKS` | Лимит задач, которые можно взять | `4` |
+| `SPRINT_WHITELIST` | Список спринтов через запятую | пусто |
+| `NOTIFICATION_CHANNELS` | Каналы уведомлений: `telegram`, `email`, `telegram,email` | `telegram` |
+| `LOG_LEVEL` | Уровень логирования Pino | `info` |
+| `PORT` | Порт HTTP-сервера | `3000` |
+
+### Браузер и навигация
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PUPPETEER_EXECUTABLE_PATH` | Путь до Chrome/Chromium | автоопределение |
+| `USER_DATA_DIR` | Папка профиля браузера | системный temp-путь |
+| `USER_AGENT` | User-Agent для страниц | встроенное значение |
+| `NAVIGATION_WAIT_UNTIL` | Режим ожидания навигации: `load`, `domcontentloaded`, `networkidle0`, `networkidle2` | `domcontentloaded` |
+| `NAVIGATION_TIMEOUT_MS` | Таймаут навигации в миллисекундах | `30000` |
+
+Примечание: `HEADLESS` сейчас не используется напрямую. Режим headless выбирается кодом автоматически в hosting-окружении.
+
+### Telegram
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Токен Telegram-бота | - |
+| `TELEGRAM_CHAT_ID` | Chat ID для уведомлений и команд | - |
+
+Доступные команды в Telegram:
+
+- `/start`
+- `/config`
+- `/restart`
+
+### Email / SMTP
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `SMTP_USER` | Логин отправителя | - |
+| `SMTP_PASSWORD` | Пароль / app password | - |
+| `SMTP_RECIPIENT` | Получатель уведомлений | - |
+| `SMTP_HOST` | SMTP-хост | `smtp.yandex.ru` |
+| `SMTP_PORT` | SMTP-порт | `465` |
+
+## Как это работает
+
+1. Приложение поднимает браузер и открывает `TARGET_BOARD_URL`.
+2. Ищет виджет по `TASK_WIDGET_TITLE`.
+3. Извлекает задачи и сравнивает их с уже замеченными.
+4. Отправляет уведомления в выбранные каналы.
+5. Если `AUTO_ASSIGN=1`, дополнительно пытается взять подходящие задачи в работу.
+6. При сбоях пытается восстановить браузер и продолжить мониторинг.
+
+## HTTP endpoints
+
+- `GET /health` - проверка, что процесс жив
+- `POST /webhook` - обработка Telegram webhook, если вы используете webhook-схему вместо polling
+
+Если Telegram-канал выключен, `POST /webhook` фактически не используется.
+
+## Структура
+
+```text
 src/
-├── index.js          # Main application entry point
-├── browserManager.js # Browser instance management
-├── taskManager.js    # Task monitoring logic
-├── telegramNotifier.js # Telegram bot integration
-├── mailService.js    # Email fallback notifications
-├── logger.js         # Structured logging
-├── config.js         # Configuration management
-└── utils.js          # Utility functions
+├── index.js
+├── browserManager.js
+├── config.js
+├── emailNotifier.js
+├── logger.js
+├── mailService.js
+├── notifier.js
+├── taskManager.js
+├── telegramNotifier.js
+└── utils.js
 ```
 
-## 🔧 How It Works
-
-1. **Initialization**: Launches headless browser and navigates to task board
-2. **Authentication**: Handles login if required (4-minute grace period)
-3. **Monitoring**: Continuously checks the configured dashboard widget
-4. **Filtering**: Applies sprint whitelist rules to tasks
-5. **Assignment**: Automatically claims qualifying tasks
-6. **Notification**: Sends Telegram alerts for new tasks and assignments
-7. **Recovery**: Automatic retry on errors with exponential backoff
-
-## 🎯 Task Filtering
-
-Tasks are filtered based on:
-
-- Sprint numbers in brackets (e.g., `[10] Task title`)
-- Configurable whitelist (`SPRINT_WHITELIST=19,10,14`)
-- Maximum task limit (`MAX_TASKS=15`)
-
-## 📊 Notifications
-
-### Telegram Messages
-
-- ✅ Task assigned successfully
-- 🚀 New tasks detected
-- ⚠️ Authentication required
-- ❌ Error notifications
-- 📋 Configuration updates
-
-### Email Fallback
-
-If Telegram fails, notifications are sent via email as backup.
-
-## 🛠️ Development
-
-### Scripts
-
-```bash
-npm start      # Start production monitoring
-npm run dev    # Start development mode
-```
-
-### Logging
-
-Uses Pino for structured JSON logging with pretty-print in development.
-
-## 🌐 Deployment
-
-### Local Deployment
+## Запуск и диагностика
 
 ```bash
 npm start
 ```
 
-### Production Deployment
+Что проверить, если что-то не работает:
 
-1. Set `NODE_ENV=production`
-2. Configure reverse proxy for webhook endpoints
-3. Set up process manager (PM2 recommended)
+- Корректен ли `TARGET_BOARD_URL`
+- Совпадает ли `TASK_WIDGET_TITLE` с реальным названием виджета
+- Есть ли действующая авторизация в браузерном профиле `USER_DATA_DIR`
+- Доступен ли Chrome по `PUPPETEER_EXECUTABLE_PATH`
+- Заполнены ли переменные для выбранного канала уведомлений
 
-### Docker (Example)
+## Что важно знать
 
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-CMD ["npm", "start"]
-```
-
-## 📈 Monitoring Endpoints
-
-- `GET /health` - Health check endpoint
-- `POST /webhook` - Telegram webhook handler
-
-## 🔒 Security
-
-- Environment-based configuration
-- Secure credential storage
-- No hardcoded secrets
-- Input validation and sanitization
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **Chrome not found**
-
-   - Install Google Chrome
-   - Set `PUPPETEER_EXECUTABLE_PATH` in environment
-
-2. **Authentication failures**
-
-   - Check network connectivity
-   - Verify credentials in browser session
-
-3. **Telegram notifications not working**
-   - Verify bot token and chat ID
-   - Check internet connectivity
-
-### Logs
-
-Check application logs for detailed error information and debugging.
-
-## 📄 License
-
-MIT License - see LICENSE file for details.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 🆘 Support
-
-For issues and questions:
-
-1. Check the troubleshooting section
-2. Review application logs
-3. Create a GitHub issue with detailed information
+- `TARGET_URL` сейчас в runtime не используется, ориентируйтесь на `TARGET_BOARD_URL`.
+- `AUTH` сейчас не используется и не нужен в `.env`.
+- Скрипт в `package.json` только один: `npm start`.

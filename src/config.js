@@ -9,6 +9,18 @@ const allowedWaitUntil = [
   "networkidle2",
 ];
 
+const allowedNotificationChannels = ["telegram", "email"];
+const notificationChannels = (
+  process.env.NOTIFICATION_CHANNELS || "telegram"
+)
+  .split(",")
+  .map((channel) => channel.trim().toLowerCase())
+  .filter((channel, index, array) =>
+    channel && allowedNotificationChannels.includes(channel)
+      ? array.indexOf(channel) === index
+      : false
+  );
+
 export const CONFIG = {
   autoAssign: process.env.AUTO_ASSIGN !== "0",
   sprintWhitelist: process.env.SPRINT_WHITELIST
@@ -23,6 +35,8 @@ export const CONFIG = {
     ? process.env.NAVIGATION_WAIT_UNTIL
     : "domcontentloaded",
   navigationTimeoutMs: parseInt(process.env.NAVIGATION_TIMEOUT_MS, 10) || 30000,
+  notificationChannels:
+    notificationChannels.length > 0 ? notificationChannels : ["telegram"],
   userAgent:
     process.env.USER_AGENT ||
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

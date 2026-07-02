@@ -3,6 +3,8 @@ import express from "express";
 import BrowserManager from "./browserManager.js";
 import TaskManager from "./taskManager.js";
 import TelegramNotifier from "./telegramNotifier.js";
+import EmailNotifier from "./emailNotifier.js";
+import Notifier from "./notifier.js";
 import logger from "./logger.js";
 import CONFIG from "./config.js";
 
@@ -12,6 +14,7 @@ const app = express();
 let browserManager = null;
 let taskManager = null;
 let notifier = null;
+let telegramNotifier = null;
 let isInitializing = false;
 let isRestarting = false;
 
@@ -50,13 +53,13 @@ export async function restartMonitoring() {
 
 function getMonitoringConfigMessage() {
   const sprintWhitelist = formatSprintWhitelist(CONFIG.sprintWhitelist);
-  const monitoringActive = taskManager?.isMonitoringActive() ? "yes" : "no";
+  const monitoringActive = taskManager?.isMonitoringActive() ? "вкл" : "выкл";
   const serverPort = process.env.PORT || 3000;
 
   return [
     "⚙️ Текущий конфиг:",
     "",
-    `Автозабор: ${CONFIG.autoAssign ? "1" : "0"}`,
+    `Автозабор: ${CONFIG.autoAssign ? "вкл" : "выкл"}`,
     `Лимит задач: ${CONFIG.maxTasks}`,
     `Взято задач: ${taskManager?.getTasksTaken() ?? 0} ✅`,
     `Спринты: ${sprintWhitelist} 🏃`,
@@ -64,6 +67,7 @@ function getMonitoringConfigMessage() {
     `Карточка: ${CONFIG.taskWidgetTitle}`,
     `Мониторинг: ${monitoringActive} 🖥`,
     `Порт сервера: ${serverPort}`,
+    `Каналы уведомлений: ${CONFIG.notificationChannels.join(", ")}`,
     `SMTP пользователь: ${process.env.SMTP_USER || "не задан"}`,
     `SMTP получатель: ${process.env.SMTP_RECIPIENT || "не задан"}`,
     `SMTP хост: ${process.env.SMTP_HOST || "не задан"}`,
@@ -105,21 +109,42 @@ async function initialize() {
   isInitializing = true;
 
   try {
-    notifier = new TelegramNotifier({
-      botToken: process.env.TELEGRAM_BOT_TOKEN,
-      chatId: process.env.TELEGRAM_CHAT_ID,
-      onRestart: restartMonitoring,
-      getConfig: getMonitoringConfigMessage,
-    });
+    const channels = [];
 
-    if (!process.env.TELEGRAM_CHAT_ID) {
-      logger.info("ChatId не задан. Для получения отправьте сообщение боту.");
-      const chatId = await notifier.listenForChatId();
+    logger.info(
+      { notificationChannels: CONFIG.notificationChannels },
+      "Настройка каналов уведомлений"
+    );
+
+    if (CONFIG.notificationChannels.includes("telegram")) {
+      telegramNotifier = new TelegramNotifier({
+        botToken: process.env.TELEGRAM_BOT_TOKEN,
+        chatId: process.env.TELEGRAM_CHAT_ID,
+        onRestart: restartMonitoring,
+        getConfig: getMonitoringConfigMessage,
+      });
+
+      if (!process.env.TELEGRAM_CHAT_ID) {
+        logger.info("ChatId не задан. Для получения отправьте сообщение боту.");
+        const chatId = await telegramNotifier.listenForChatId();
+        logger.info(
+          `Запишите полученный chatId в .env: TELEGRAM_CHAT_ID=${chatId}`
+        );
+        process.exit(0);
+      }
+
+      channels.push(telegramNotifier);
+    } else {
       logger.info(
-        `Запишите полученный chatId в .env: TELEGRAM_CHAT_ID=${chatId}`
+        "Telegram polling отключён: канал telegram не включён в NOTIFICATION_CHANNELS"
       );
-      process.exit(0);
     }
+
+    if (CONFIG.notificationChannels.includes("email")) {
+      channels.push(new EmailNotifier());
+    }
+
+    notifier = new Notifier(channels);
 
     browserManager = new BrowserManager();
     await browserManager.init();
@@ -127,7 +152,9 @@ async function initialize() {
     taskManager = new TaskManager(browserManager, notifier);
     await taskManager.startMonitoring();
 
-    notifier.startPolling();
+    if (telegramNotifier) {
+      telegramNotifier.startPolling();
+    }
 
     app.get("/health", (req, res) => res.status(200).send("OK"));
 
@@ -136,12 +163,12 @@ async function initialize() {
       try {
         const update = req.body;
 
-        if (update.message) {
-          await notifier.handleMessage(update.message);
+        if (telegramNotifier && update.message) {
+          await telegramNotifier.handleMessage(update.message);
         }
 
-        if (update.callback_query) {
-          await notifier.handleCallback(update.callback_query);
+        if (telegramNotifier && update.callback_query) {
+          await telegramNotifier.handleCallback(update.callback_query);
         }
 
         res.status(200).send("OK");
@@ -164,8 +191,8 @@ async function initialize() {
       if (browserManager) {
         await browserManager.close();
       }
-      if (notifier) {
-        notifier.stopPolling();
+      if (telegramNotifier) {
+        telegramNotifier.stopPolling();
       }
       process.exit(0);
     });
