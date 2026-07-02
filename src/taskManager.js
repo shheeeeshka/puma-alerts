@@ -18,19 +18,11 @@ class TaskManager {
     this.projectRoot = process.cwd();
     console.log("process path : ", process.cwd());
     this.screenshotsDir = path.join(this.projectRoot, "screenshots");
-    this.logsDir = path.join(this.projectRoot, "logs");
-    this.diagnosticHtmlPrefixes = ["task-detected_", "task-landing_"];
   }
 
   async ensureScreenshotsDir() {
     if (!fs.existsSync(this.screenshotsDir)) {
       fs.mkdirSync(this.screenshotsDir, { recursive: true });
-    }
-  }
-
-  async ensureLogsDir() {
-    if (!fs.existsSync(this.logsDir)) {
-      fs.mkdirSync(this.logsDir, { recursive: true });
     }
   }
 
@@ -47,111 +39,6 @@ class TaskManager {
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
-  }
-
-  buildDiagnosticBasename(taskKey, taskTitle) {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const safeKey = this.sanitizeFilenameSegment(taskKey);
-    const safeTitle = this.sanitizeFilenameSegment(taskTitle);
-    return `${timestamp}_${safeKey}_${safeTitle}`;
-  }
-
-  clearDiagnosticArtifacts() {
-    for (const prefix of this.diagnosticHtmlPrefixes) {
-      const files = fs
-        .readdirSync(this.projectRoot, { withFileTypes: true })
-        .filter(
-          (entry) =>
-            entry.isFile() &&
-            entry.name.startsWith(prefix) &&
-            entry.name.endsWith(".html")
-        );
-
-      for (const file of files) {
-        fs.rmSync(path.join(this.projectRoot, file.name), { force: true });
-      }
-    }
-
-    if (fs.existsSync(this.logsDir)) {
-      const logEntries = fs.readdirSync(this.logsDir, { withFileTypes: true });
-      for (const entry of logEntries) {
-        fs.rmSync(path.join(this.logsDir, entry.name), {
-          recursive: true,
-          force: true,
-        });
-      }
-    }
-  }
-
-  async prepareDiagnosticArtifacts() {
-    await this.ensureLogsDir();
-    this.clearDiagnosticArtifacts();
-  }
-
-  async saveHtmlSnapshot(page, filename) {
-    try {
-      const html = await page.content();
-      const filepath = path.join(this.projectRoot, filename);
-      fs.writeFileSync(filepath, html, "utf-8");
-      logger.info("HTML-снимок сохранен", { path: filepath });
-      return filepath;
-    } catch (error) {
-      logger.error("Не удалось сохранить HTML-снимок", {
-        filename,
-        error: error.message,
-      });
-      return null;
-    }
-  }
-
-  async saveLogScreenshot(page, filename) {
-    try {
-      await this.ensureLogsDir();
-      const screenshotPath = path.join(this.logsDir, filename);
-      await page.screenshot({ path: screenshotPath, type: "png", fullPage: true });
-      logger.info("Диагностический скриншот сохранен", { path: screenshotPath });
-      return screenshotPath;
-    } catch (error) {
-      logger.error("Не удалось сохранить диагностический скриншот", {
-        filename,
-        error: error.message,
-      });
-      return null;
-    }
-  }
-
-  async captureTaskDetectedDiagnostics(page, basename) {
-    await this.saveHtmlSnapshot(page, `task-detected_${basename}.html`);
-    await this.saveLogScreenshot(page, `task-detected_${basename}.png`);
-  }
-
-  async captureTaskLandingDiagnostics(taskUrl, basename) {
-    let taskPage = null;
-
-    try {
-      taskPage = await this.browserManager.openNewTab();
-      if (!taskPage) {
-        return;
-      }
-
-      await taskPage.goto(taskUrl, {
-        waitUntil: CONFIG.navigationWaitUntil,
-        timeout: CONFIG.navigationTimeoutMs,
-      });
-      await sleep(1.5);
-
-      await this.saveHtmlSnapshot(taskPage, `task-landing_${basename}.html`);
-      await this.saveLogScreenshot(taskPage, `task-landing_${basename}.png`);
-    } catch (error) {
-      logger.error("Не удалось сохранить диагностику страницы задачи", {
-        taskUrl,
-        error: error.message,
-      });
-    } finally {
-      if (taskPage && !taskPage.isClosed()) {
-        await taskPage.close();
-      }
-    }
   }
 
   async takeScreenshot(page, name) {
@@ -179,7 +66,6 @@ class TaskManager {
     this.authNotificationSent = false;
     this.notifiedTasks.clear();
     this.processingTasks.clear();
-    await this.prepareDiagnosticArtifacts();
     logger.info("Запуск мониторинга задач");
     this.monitoringPromise = this.trackTasks().finally(() => {
       this.monitoringPromise = null;
@@ -821,9 +707,6 @@ class TaskManager {
       const { success } = await this.takeTaskOnPraktikumPage(taskUrl);
       if (success) {
         this.tasksTaken++;
-        await this.notifier.sendText(
-          `✅ Задача взята\n${taskTitle}\nВзято: ${this.tasksTaken}/${CONFIG.maxTasks}`
-        );
       }
       return success;
     } catch (error) {
@@ -993,20 +876,12 @@ class TaskManager {
 
       for (const taskKey of tasksToProcess) {
         const taskTitle = taskTitles[taskKey];
-        const diagnosticBasename = this.buildDiagnosticBasename(
-          taskKey,
-          taskTitle
-        );
         logger.info("Клик по задаче для открытия модального окна", { taskKey });
 
         const taskClicked = await this.openTaskDetails(mainPage, taskKey);
 
         if (taskClicked) {
           await sleep(1.4);
-          await this.captureTaskDetectedDiagnostics(
-            mainPage,
-            diagnosticBasename
-          );
 
           const linkInfo = await this.extractTaskUrlFromModal(mainPage, taskKey);
           if (linkInfo.url) {
@@ -1021,10 +896,6 @@ class TaskManager {
               datesText: linkInfo.datesText,
               statuses: linkInfo.statuses,
             });
-            await this.captureTaskLandingDiagnostics(
-              linkInfo.url,
-              diagnosticBasename
-            );
           } else {
             logger.info("Не удалось получить URL для задачи", { taskKey });
             tasksWithUrls.push({
@@ -1110,8 +981,8 @@ class TaskManager {
               `✅ Удалось взять в работу ${
                 assignedTasks.length
               } задач:\n${assignedTasks
-                .map((task) => `• ${task}`)
-                .join("\n")}\n📊 Взято задач: ${this.tasksTaken}/${
+                .map((task) => task)
+                .join("\n")}\nВзято задач: ${this.tasksTaken}/${
                 CONFIG.maxTasks
               }`
             );
