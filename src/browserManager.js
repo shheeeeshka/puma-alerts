@@ -160,7 +160,10 @@ class BrowserManager {
 
     try {
       logger.debug("Перезагрузка страницы");
-      await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+      await this.page.reload({
+        waitUntil: CONFIG.navigationWaitUntil,
+        timeout: CONFIG.navigationTimeoutMs,
+      });
       await new Promise((resolve) => setTimeout(resolve, 2000));
       return true;
     } catch (error) {
@@ -176,8 +179,8 @@ class BrowserManager {
 
     try {
       const navigationOptions = {
-        waitUntil: "networkidle0",
-        timeout: 30000,
+        waitUntil: CONFIG.navigationWaitUntil,
+        timeout: CONFIG.navigationTimeoutMs,
         ...options,
       };
 

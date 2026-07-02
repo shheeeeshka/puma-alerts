@@ -4,7 +4,7 @@ A sophisticated automated task monitoring and management system built with Node.
 
 ## ✨ Features
 
-- **Real-time Monitoring**: Continuously scans task boards for new "Normal Tasks"
+- **Real-time Monitoring**: Continuously scans the configured task widget on the dashboard
 - **Smart Auto-Assignment**: Automatically claims tasks based on sprint whitelist rules
 - **Cross-Platform**: Works on Windows, macOS, and Linux
 - **Telegram Integration**: Instant notifications with task details and status updates
@@ -53,6 +53,7 @@ MAX_TASKS=15
 SPRINT_WHITELIST=19,10,14
 TARGET_URL=https://your-target-url.com
 TARGET_BOARD_URL=https://your-board-url.com
+TASK_WIDGET_TITLE=Обычные задачи
 
 USER_DATA_DIR=./tmp/puppeteer_user_data
 ```
@@ -84,6 +85,7 @@ npm start
 | `SPRINT_WHITELIST`   | Comma-separated sprint numbers   | -                           |
 | `TARGET_URL`         | Base URL for task links          | -                           |
 | `TARGET_BOARD_URL`   | Dashboard URL to monitor         | -                           |
+| `TASK_WIDGET_TITLE`  | Widget title to scan on dashboard| `Обычные задачи`            |
 | `AUTH`               | Enable authentication handling   | `1` (true)                  |
 | `USER_DATA_DIR`      | Browser profile directory        | `./tmp/puppeteer_user_data` |
 
@@ -111,7 +113,7 @@ src/
 
 1. **Initialization**: Launches headless browser and navigates to task board
 2. **Authentication**: Handles login if required (4-minute grace period)
-3. **Monitoring**: Continuously checks "Normal Tasks" section
+3. **Monitoring**: Continuously checks the configured dashboard widget
 4. **Filtering**: Applies sprint whitelist rules to tasks
 5. **Assignment**: Automatically claims qualifying tasks
 6. **Notification**: Sends Telegram alerts for new tasks and assignments
